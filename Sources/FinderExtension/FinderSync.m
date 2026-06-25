@@ -712,6 +712,12 @@ static NSInteger QRMenuTagBase = 42000;
 
     NSMutableArray<NSURLQueryItem *> *items = [NSMutableArray array];
     [items addObject:[NSURLQueryItem queryItemWithName:@"dir" value:directory.path]];
+    NSString *token = [self commandToken];
+    if (token.length == 0) {
+        [self log:@"missing command token"];
+        return;
+    }
+    [items addObject:[NSURLQueryItem queryItemWithName:@"token" value:token]];
     NSString *selectedPaths = [self selectedPathsString];
     if (selectedPaths.length > 0) {
         [items addObject:[NSURLQueryItem queryItemWithName:@"paths" value:selectedPaths]];
@@ -735,12 +741,15 @@ static NSInteger QRMenuTagBase = 42000;
     NSError *directoryError = nil;
     [[NSFileManager defaultManager] createDirectoryAtPath:directoryPath
                               withIntermediateDirectories:YES
-                                               attributes:nil
+                                               attributes:@{NSFilePosixPermissions: @0700}
                                                     error:&directoryError];
     if (directoryError) {
         [self log:[NSString stringWithFormat:@"command directory create failed %@", directoryError.localizedDescription]];
         return;
     }
+    [[NSFileManager defaultManager] setAttributes:@{NSFilePosixPermissions: @0700}
+                                     ofItemAtPath:directoryPath
+                                            error:nil];
 
     NSString *filename = [NSString stringWithFormat:@"command-%lld-%u.cmd",
                           (long long)([[NSDate date] timeIntervalSince1970] * 1000),
@@ -748,11 +757,21 @@ static NSInteger QRMenuTagBase = 42000;
     NSURL *fileURL = [NSURL fileURLWithPath:[directoryPath stringByAppendingPathComponent:filename]];
     NSError *writeError = nil;
     BOOL ok = [urlString writeToURL:fileURL atomically:YES encoding:NSUTF8StringEncoding error:&writeError];
+    if (ok) {
+        [[NSFileManager defaultManager] setAttributes:@{NSFilePosixPermissions: @0600}
+                                         ofItemAtPath:fileURL.path
+                                                error:nil];
+    }
     if (!ok || writeError) {
         [self log:[NSString stringWithFormat:@"write command file failed %@", writeError.localizedDescription]];
     } else {
-        [self log:[NSString stringWithFormat:@"write command file %@ %@", fileURL.path, urlString]];
+        [self log:@"write command file"];
     }
+}
+
+- (NSString *)commandToken {
+    NSString *token = [self settingsDictionary][@"commandToken"];
+    return [token isKindOfClass:NSString.class] ? token : nil;
 }
 
 - (NSString *)selectedPathsString {
@@ -768,17 +787,6 @@ static NSInteger QRMenuTagBase = 42000;
 
 - (void)log:(NSString *)message {
     NSLog(@"QuickRightMenu Extension: %@", message);
-    NSString *line = [NSString stringWithFormat:@"%@ Extension: %@\n", [NSDate date], message];
-    NSURL *url = [NSURL fileURLWithPath:@"/tmp/QuickRightMenu.log"];
-    NSData *data = [line dataUsingEncoding:NSUTF8StringEncoding];
-    NSFileHandle *handle = [NSFileHandle fileHandleForWritingToURL:url error:nil];
-    if (handle) {
-        [handle seekToEndOfFile];
-        [handle writeData:data];
-        [handle closeFile];
-    } else {
-        [data writeToURL:url atomically:YES];
-    }
 }
 
 @end
