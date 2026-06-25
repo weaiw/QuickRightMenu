@@ -12,19 +12,6 @@
     <string>com.liaowenbin.QuickRightMenu</string>
     <key>CFBundleIconFile</key>
     <string>AppIcon</string>
-    <key>CFBundleURLTypes</key>
-    <array>
-        <dict>
-            <key>CFBundleTypeRole</key>
-            <string>Editor</string>
-            <key>CFBundleURLName</key>
-            <string>QuickRightMenu Command URL</string>
-            <key>CFBundleURLSchemes</key>
-            <array>
-                <string>quickrightmenu</string>
-            </array>
-        </dict>
-    </array>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>
