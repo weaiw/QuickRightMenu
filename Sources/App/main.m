@@ -1,5 +1,4 @@
 #import <Cocoa/Cocoa.h>
-#import <Carbon/Carbon.h>
 #import <ImageIO/ImageIO.h>
 
 static NSString * const QRProductName = @"QuickRightMenu";
@@ -37,11 +36,6 @@ static NSString * const QRReleasesURL = @"https://github.com/weaiw/QuickRightMen
                                                        selector:@selector(pollCommandFiles:)
                                                        userInfo:nil
                                                         repeats:YES];
-
-    [[NSAppleEventManager sharedAppleEventManager] setEventHandler:self
-                                                       andSelector:@selector(handleGetURLEvent:withReplyEvent:)
-                                                     forEventClass:kInternetEventClass
-                                                        andEventID:kAEGetURL];
 
     NSImage *appIcon = [self appIconImage];
     if (appIcon) {
@@ -155,6 +149,7 @@ static NSString * const QRReleasesURL = @"https://github.com/weaiw/QuickRightMen
     [defaults addEntriesFromDictionary:templates];
     defaults[@"terminalPreference"] = @"terminal";
     defaults[@"hasSeenPermissionGuide"] = @NO;
+    defaults[@"commandToken"] = [NSUUID UUID].UUIDString;
     for (NSInteger i = 1; i <= 3; i++) {
         defaults[[NSString stringWithFormat:@"favoriteDir%ldName", (long)i]] = @"";
         defaults[[NSString stringWithFormat:@"favoriteDir%ldPath", (long)i]] = @"";
@@ -740,13 +735,8 @@ static NSString * const QRReleasesURL = @"https://github.com/weaiw/QuickRightMen
     return [NSURL fileURLWithPath:path];
 }
 
-- (void)handleGetURLEvent:(NSAppleEventDescriptor *)event withReplyEvent:(NSAppleEventDescriptor *)replyEvent {
-    NSString *urlString = [[event paramDescriptorForKeyword:keyDirectObject] stringValue];
-    [self handleCommandURLString:urlString source:@"URL event"];
-}
-
 - (void)handleCommandURLString:(NSString *)urlString source:(NSString *)source {
-    [self log:[NSString stringWithFormat:@"%@ %@", source, urlString ?: @""]];
+    [self log:source ?: @"command"];
     NSURLComponents *components = [NSURLComponents componentsWithString:urlString ?: @""];
     if (![components.scheme isEqualToString:@"quickrightmenu"]) {
         return;
@@ -758,6 +748,10 @@ static NSString * const QRReleasesURL = @"https://github.com/weaiw/QuickRightMen
         if (item.name && item.value) {
             params[item.name] = item.value;
         }
+    }
+    if (![self isValidCommandToken:params[@"token"]]) {
+        [self log:@"rejected command with invalid token"];
+        return;
     }
 
     NSURL *directory = [NSURL fileURLWithPath:params[@"dir"] ?: NSHomeDirectory()];
@@ -802,6 +796,14 @@ static NSString * const QRReleasesURL = @"https://github.com/weaiw/QuickRightMen
     } else {
         [self log:[NSString stringWithFormat:@"unknown command %@", command ?: @""]];
     }
+}
+
+- (BOOL)isValidCommandToken:(NSString *)token {
+    NSString *expected = self.settings[@"commandToken"];
+    return [token isKindOfClass:NSString.class] &&
+           [expected isKindOfClass:NSString.class] &&
+           token.length > 0 &&
+           [token isEqualToString:expected];
 }
 
 - (NSString *)templateForExtension:(NSString *)extension {
@@ -1612,17 +1614,6 @@ static NSString * const QRReleasesURL = @"https://github.com/weaiw/QuickRightMen
 
 - (void)log:(NSString *)message {
     NSLog(@"QuickRightMenu App: %@", message);
-    NSString *line = [NSString stringWithFormat:@"%@ App: %@\n", [NSDate date], message];
-    NSURL *url = [NSURL fileURLWithPath:@"/tmp/QuickRightMenu.log"];
-    NSData *data = [line dataUsingEncoding:NSUTF8StringEncoding];
-    NSFileHandle *handle = [NSFileHandle fileHandleForWritingToURL:url error:nil];
-    if (handle) {
-        [handle seekToEndOfFile];
-        [handle writeData:data];
-        [handle closeFile];
-    } else {
-        [data writeToURL:url atomically:YES];
-    }
 }
 
 - (void)showInfo:(NSString *)message details:(NSString *)details {
