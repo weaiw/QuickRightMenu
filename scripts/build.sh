@@ -13,7 +13,7 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/PlugIns"
 mkdir -p "$EXT/Contents/MacOS" "$EXT/Contents/Resources"
 mkdir -p "$MODULE_CACHE"
 
-if command -v python3 >/dev/null 2>&1; then
+if [ ! -f "$ROOT/Resources/AppIcon.icns" ] && command -v python3 >/dev/null 2>&1; then
   python3 "$ROOT/scripts/make_icon.py" || true
 fi
 
@@ -31,7 +31,12 @@ clang \
   -fobjc-arc \
   -framework Cocoa \
   -framework ImageIO \
+  -framework UniformTypeIdentifiers \
+  -framework PDFKit \
+  -framework Vision \
+  -framework CoreText \
   "$ROOT/Sources/App/main.m" \
+  "$ROOT/Sources/App/QRFileOperations.m" \
   -o "$APP/Contents/MacOS/QuickRightMenu"
 
 clang \
@@ -42,6 +47,7 @@ clang \
   -fobjc-arc \
   -framework Cocoa \
   -framework FinderSync \
+  -framework UniformTypeIdentifiers \
   -framework Foundation \
   "$ROOT/Sources/FinderExtension/main.m" \
   "$ROOT/Sources/FinderExtension/FinderSync.m" \
