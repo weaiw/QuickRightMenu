@@ -1,16 +1,36 @@
 #import <Cocoa/Cocoa.h>
 #import <Carbon/Carbon.h>
 #import <ImageIO/ImageIO.h>
+#import "../Shared/QRFeatures.h"
+#import "QRFileOperations.h"
 
 static NSString * const QRProductName = @"QuickRightMenu";
-static NSString * const QRProductVersion = @"1.5.7";
+static NSString * const QRProductVersion = @"1.6.0";
 static NSString * const QRLatestReleaseAPI = @"https://api.github.com/repos/weaiw/QuickRightMenu/releases/latest";
 static NSString * const QRReleasesURL = @"https://github.com/weaiw/QuickRightMenu/releases/latest";
 
 @interface QRAppDelegate : NSObject <NSApplicationDelegate>
 @property(nonatomic, strong) NSStatusItem *statusItem;
 @property(nonatomic, strong) NSTimer *commandTimer;
-@property(nonatomic, strong) NSMutableSet<NSString *> *processedCommandPaths;
+@property(nonatomic, assign) BOOL busy;
+@property(nonatomic, strong) NSProgress *jobProgress;
+@property(nonatomic, strong) NSWindow *jobWindow;
+@property(nonatomic, strong) NSTextField *jobStatus;
+@property(nonatomic, strong) NSProgressIndicator *jobIndicator;
+@property(nonatomic, strong) NSTextView *jobDetails;
+@property(nonatomic, strong) NSButton *jobCancelButton;
+@property(nonatomic, strong) NSArray<NSURL *> *jobOutputs;
+@property(nonatomic, strong) NSArray<NSDictionary *> *undoRecords;
+@property(nonatomic, strong) NSScrollView *menuScrollView;
+@property(nonatomic, strong) NSPopUpButton *importedTemplatePopup;
+@property(nonatomic, strong) NSPopUpButton *presetPopup;
+@property(nonatomic, strong) NSPopUpButton *presetFormat;
+@property(nonatomic, strong) NSTextField *presetName;
+@property(nonatomic, strong) NSTextField *presetMaxSide;
+@property(nonatomic, strong) NSTextField *presetTargetMB;
+@property(nonatomic, strong) NSTextField *presetWatermark;
+@property(nonatomic, strong) NSTextField *presetDirectory;
+@property(nonatomic, strong) NSButton *presetStripMetadata;
 @property(nonatomic, strong) NSWindow *settingsWindow;
 @property(nonatomic, strong) NSWindow *textPreviewWindow;
 @property(nonatomic, strong) NSMutableDictionary<NSString *, id> *settings;
@@ -31,7 +51,7 @@ static NSString * const QRReleasesURL = @"https://github.com/weaiw/QuickRightMen
     self.settings = [[self loadSettings] mutableCopy];
     [self saveSettings];
 
-    self.processedCommandPaths = [NSMutableSet set];
+    self.undoRecords = @[];
     self.commandTimer = [NSTimer scheduledTimerWithTimeInterval:0.3
                                                          target:self
                                                        selector:@selector(pollCommandFiles:)
@@ -63,6 +83,10 @@ static NSString * const QRReleasesURL = @"https://github.com/weaiw/QuickRightMen
     [menu addItem:[NSMenuItem separatorItem]];
     NSMenuItem *settingsItem = [menu addItemWithTitle:@"设置..." action:@selector(showSettings:) keyEquivalent:@","];
     settingsItem.target = self;
+    NSMenuItem *recent = [menu addItemWithTitle:@"最近操作…" action:@selector(showRecentOperation:) keyEquivalent:@""];
+    recent.target = self;
+    NSMenuItem *undo = [menu addItemWithTitle:@"撤销上次移动或重命名…" action:@selector(undoLastOperation:) keyEquivalent:@""];
+    undo.target = self;
     NSMenuItem *quitItem = [menu addItemWithTitle:@"退出" action:@selector(terminate:) keyEquivalent:@"q"];
     quitItem.target = NSApp;
     self.statusItem.menu = menu;
@@ -84,53 +108,8 @@ static NSString * const QRReleasesURL = @"https://github.com/weaiw/QuickRightMen
     return nil;
 }
 
-- (NSArray<NSDictionary<NSString *, NSString *> *> *)featureRows {
-    return @[
-        @{@"key": @"newTxt", @"title": @"新建 TXT", @"category": @"新建文件"},
-        @{@"key": @"newMarkdown", @"title": @"新建 Markdown", @"category": @"新建文件"},
-        @{@"key": @"newJson", @"title": @"新建 JSON", @"category": @"新建文件"},
-        @{@"key": @"newCsv", @"title": @"新建 CSV", @"category": @"新建文件"},
-        @{@"key": @"newHtml", @"title": @"新建 HTML", @"category": @"新建文件"},
-        @{@"key": @"newYaml", @"title": @"新建 YAML", @"category": @"新建文件"},
-        @{@"key": @"newXml", @"title": @"新建 XML", @"category": @"新建文件"},
-        @{@"key": @"newShell", @"title": @"新建 Shell", @"category": @"新建文件"},
-        @{@"key": @"newPython", @"title": @"新建 Python", @"category": @"新建文件"},
-        @{@"key": @"newJavaScript", @"title": @"新建 JavaScript", @"category": @"新建文件"},
-        @{@"key": @"newTypeScript", @"title": @"新建 TypeScript", @"category": @"新建文件"},
-        @{@"key": @"newCss", @"title": @"新建 CSS", @"category": @"新建文件"},
-        @{@"key": @"newWord", @"title": @"新建 Word", @"category": @"新建文件"},
-        @{@"key": @"newExcel", @"title": @"新建 Excel", @"category": @"新建文件"},
-        @{@"key": @"newPowerPoint", @"title": @"新建 PowerPoint", @"category": @"新建文件"},
-        @{@"key": @"copyPath", @"title": @"复制路径", @"category": @"基础操作"},
-        @{@"key": @"copyName", @"title": @"复制文件名", @"category": @"基础操作"},
-        @{@"key": @"copyParent", @"title": @"复制父目录", @"category": @"基础操作"},
-        @{@"key": @"copyFileURL", @"title": @"复制 file URL", @"category": @"基础操作"},
-        @{@"key": @"copyMarkdownLink", @"title": @"复制 Markdown 链接", @"category": @"基础操作"},
-        @{@"key": @"copyToDesktop", @"title": @"复制到桌面", @"category": @"文件操作"},
-        @{@"key": @"copyToDocuments", @"title": @"复制到文稿", @"category": @"文件操作"},
-        @{@"key": @"copyToDownloads", @"title": @"复制到下载", @"category": @"文件操作"},
-        @{@"key": @"copyToPictures", @"title": @"复制到图片", @"category": @"文件操作"},
-        @{@"key": @"copyToMovies", @"title": @"复制到影片", @"category": @"文件操作"},
-        @{@"key": @"copyToMusic", @"title": @"复制到音乐", @"category": @"文件操作"},
-        @{@"key": @"copyToChoose", @"title": @"复制到选择文件夹", @"category": @"文件操作"},
-        @{@"key": @"moveToDesktop", @"title": @"移动到桌面", @"category": @"文件操作"},
-        @{@"key": @"moveToDocuments", @"title": @"移动到文稿", @"category": @"文件操作"},
-        @{@"key": @"moveToDownloads", @"title": @"移动到下载", @"category": @"文件操作"},
-        @{@"key": @"moveToPictures", @"title": @"移动到图片", @"category": @"文件操作"},
-        @{@"key": @"moveToMovies", @"title": @"移动到影片", @"category": @"文件操作"},
-        @{@"key": @"moveToMusic", @"title": @"移动到音乐", @"category": @"文件操作"},
-        @{@"key": @"moveToChoose", @"title": @"移动到选择文件夹", @"category": @"文件操作"},
-        @{@"key": @"batchRename", @"title": @"批量重命名", @"category": @"文件操作"},
-        @{@"key": @"copyImageSize", @"title": @"复制图片尺寸", @"category": @"图片工具"},
-        @{@"key": @"compressImage", @"title": @"压缩图片", @"category": @"图片工具"},
-        @{@"key": @"convertPng", @"title": @"转换为 PNG", @"category": @"图片工具"},
-        @{@"key": @"convertJpeg", @"title": @"转换为 JPEG", @"category": @"图片工具"},
-        @{@"key": @"convertWebp", @"title": @"转换为 WebP", @"category": @"图片工具"},
-        @{@"key": @"textStats", @"title": @"统计字数", @"category": @"文本工具"},
-        @{@"key": @"textToUtf8", @"title": @"转 UTF-8", @"category": @"文本工具"},
-        @{@"key": @"textPreview", @"title": @"快速预览纯文本", @"category": @"文本工具"},
-        @{@"key": @"terminal", @"title": @"在终端打开", @"category": @"基础操作"}
-    ];
+- (NSArray<NSDictionary *> *)featureRows {
+    return QROrderedFeatures(self.settings ?: @{});
 }
 
 - (NSDictionary<NSString *, id> *)defaultSettings {
@@ -153,6 +132,13 @@ static NSString * const QRReleasesURL = @"https://github.com/weaiw/QuickRightMen
         @"template_css": @":root {\n  color-scheme: light dark;\n}\n"
     };
     [defaults addEntriesFromDictionary:templates];
+    defaults[@"contextualMenus"] = @YES;
+    defaults[@"pinnedFeatures"] = @[];
+    defaults[@"menuOrder"] = @[];
+    defaults[@"preferredApplication"] = @"";
+    defaults[@"importedTemplates"] = @[];
+    defaults[@"imagePresets"] = @[@{@"name": @"准备上传", @"format": @"jpg", @"maxSide": @1920,
+                                     @"targetBytes": @1000000, @"stripMetadata": @YES, @"watermark": @"", @"directory": @""}];
     defaults[@"terminalPreference"] = @"terminal";
     defaults[@"hasSeenPermissionGuide"] = @NO;
     for (NSInteger i = 1; i <= 3; i++) {
@@ -163,14 +149,35 @@ static NSString * const QRReleasesURL = @"https://github.com/weaiw/QuickRightMen
 }
 
 - (NSDictionary<NSString *, id> *)loadSettings {
-    NSMutableDictionary<NSString *, id> *merged = [[self defaultSettings] mutableCopy];
+    NSMutableDictionary *merged = [[self defaultSettings] mutableCopy];
     NSDictionary *stored = [NSDictionary dictionaryWithContentsOfURL:[self settingsURL]];
-    if ([stored isKindOfClass:NSDictionary.class]) {
-        for (NSString *key in stored) {
-            if (merged[key] && ([stored[key] isKindOfClass:NSNumber.class] || [stored[key] isKindOfClass:NSString.class])) {
-                merged[key] = stored[key];
-            }
+    if (![stored isKindOfClass:NSDictionary.class]) return merged;
+    for (NSString *key in merged.allKeys) {
+        id value = stored[key], original = merged[key];
+        if (([original isKindOfClass:NSNumber.class] && [value isKindOfClass:NSNumber.class]) ||
+            ([original isKindOfClass:NSString.class] && [value isKindOfClass:NSString.class])) merged[key] = value;
+    }
+    for (NSString *key in @[@"pinnedFeatures", @"menuOrder"]) {
+        if (![stored[key] isKindOfClass:NSArray.class]) continue;
+        NSMutableArray *values = [NSMutableArray array];
+        for (id value in stored[key]) if ([value isKindOfClass:NSString.class] && ![values containsObject:value]) [values addObject:value];
+        merged[key] = values;
+    }
+    for (NSString *key in @[@"importedTemplates", @"imagePresets"]) {
+        if (![stored[key] isKindOfClass:NSArray.class]) continue;
+        NSMutableArray *values = [NSMutableArray array];
+        for (id value in stored[key]) {
+            if (![value isKindOfClass:NSDictionary.class] || ![value[@"name"] isKindOfClass:NSString.class]) continue;
+            if ([key isEqualToString:@"importedTemplates"]) {
+                if ([value[@"path"] isKindOfClass:NSString.class] && [value[@"path"] isAbsolutePath]) [values addObject:value];
+            } else if ([@[@"jpg", @"png"] containsObject:value[@"format"]] &&
+                       [value[@"maxSide"] isKindOfClass:NSNumber.class] && [value[@"targetBytes"] isKindOfClass:NSNumber.class] &&
+                       [value[@"stripMetadata"] isKindOfClass:NSNumber.class] && [value[@"watermark"] isKindOfClass:NSString.class] &&
+                       [value[@"directory"] isKindOfClass:NSString.class] && [value[@"maxSide"] integerValue] >= 0 &&
+                       [value[@"maxSide"] integerValue] <= 30000 && [value[@"targetBytes"] longLongValue] >= 0 &&
+                       [value[@"targetBytes"] longLongValue] <= 100 * 1024 * 1024) [values addObject:value];
         }
+        merged[key] = values;
     }
     return merged;
 }
@@ -181,7 +188,7 @@ static NSString * const QRReleasesURL = @"https://github.com/weaiw/QuickRightMen
                              withIntermediateDirectories:YES
                                               attributes:nil
                                                    error:nil];
-    [self.settings writeToURL:url atomically:YES];
+    if (![self.settings writeToURL:url atomically:YES]) [self showError:@"设置保存失败，请检查应用的文件访问权限。"];
 }
 
 - (NSURL *)settingsURL {
@@ -240,7 +247,7 @@ static NSString * const QRReleasesURL = @"https://github.com/weaiw/QuickRightMen
     brand.frame = NSMakeRect(28, 474, 190, 30);
     [sidebar addSubview:brand];
 
-    NSTextField *version = [self labelWithText:[NSString stringWithFormat:@"正式版 %@", QRProductVersion] size:13 bold:NO color:[NSColor colorWithWhite:0.74 alpha:1]];
+    NSTextField *version = [self labelWithText:[NSString stringWithFormat:@"版本 %@", QRProductVersion] size:13 bold:NO color:[NSColor colorWithWhite:0.74 alpha:1]];
     version.frame = NSMakeRect(28, 448, 170, 22);
     [sidebar addSubview:version];
 
@@ -249,12 +256,13 @@ static NSString * const QRReleasesURL = @"https://github.com/weaiw/QuickRightMen
         @{@"page": @"menu", @"title": @"右键菜单", @"detail": @"菜单开关"},
         @{@"page": @"templates", @"title": @"文件模板", @"detail": @"新建内容默认值"},
         @{@"page": @"favorites", @"title": @"常用目录", @"detail": @"复制 / 移动快捷目录"},
-        @{@"page": @"terminal", @"title": @"终端偏好", @"detail": @"Terminal / iTerm2 / Warp"},
+        @{@"page": @"terminal", @"title": @"打开方式", @"detail": @"终端与常用应用"},
+        @{@"page": @"presets", @"title": @"处理组合", @"detail": @"图片处理与输出目录"},
         @{@"page": @"login", @"title": @"开机启动", @"detail": [self isLoginItemEnabled] ? @"已开启" : @"未开启"},
         @{@"page": @"update", @"title": @"软件更新", @"detail": self.updateAvailable ? @"发现新版本" : @"GitHub Release"}
     ];
     for (NSInteger i = 0; i < navItems.count; i++) {
-        NSView *navRow = [[NSView alloc] initWithFrame:NSMakeRect(18, 402 - i * 46, 200, 40)];
+        NSView *navRow = [[NSView alloc] initWithFrame:NSMakeRect(18, 404 - i * 44, 200, 40)];
         navRow.wantsLayer = YES;
         if ([navItems[i][@"page"] isEqualToString:self.settingsPage]) {
             navRow.layer.backgroundColor = [NSColor colorWithCalibratedRed:0.17 green:0.21 blue:0.31 alpha:1.0].CGColor;
@@ -276,6 +284,7 @@ static NSString * const QRReleasesURL = @"https://github.com/weaiw/QuickRightMen
         navButton.target = self;
         navButton.action = @selector(settingNavigationClicked:);
         navButton.identifier = navItems[i][@"page"];
+        [navButton setAccessibilityLabel:navItems[i][@"title"]];
         [navRow addSubview:navButton];
         [sidebar addSubview:navRow];
     }
@@ -308,6 +317,8 @@ static NSString * const QRReleasesURL = @"https://github.com/weaiw/QuickRightMen
         [self addFavoriteDirectoryPageToView:root];
     } else if ([self.settingsPage isEqualToString:@"terminal"]) {
         [self addTerminalPageToView:root];
+    } else if ([self.settingsPage isEqualToString:@"presets"]) {
+        [self addPresetPageToView:root];
     } else if ([self.settingsPage isEqualToString:@"login"]) {
         [self addLoginPageToView:root];
     } else if ([self.settingsPage isEqualToString:@"update"]) {
@@ -396,47 +407,51 @@ static NSString * const QRReleasesURL = @"https://github.com/weaiw/QuickRightMen
 }
 
 - (void)addMenuPageToView:(NSView *)root {
-    [self addPageTitle:@"右键菜单" hint:@"勾选后会显示在 Finder 右键菜单。新建文件、复制到、移动到会按功能折叠到二级菜单。" toView:root];
-
-    NSScrollView *scrollView = [[NSScrollView alloc] initWithFrame:NSMakeRect(266, 86, 594, 420)];
-    scrollView.hasVerticalScroller = YES;
-    scrollView.borderType = NSBezelBorder;
-    scrollView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
-    [root addSubview:scrollView];
-
-    NSInteger estimatedRows = [self featureRows].count + 3;
-    CGFloat listHeight = MAX(420, estimatedRows * 42 + 40);
-    NSView *list = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 574, listHeight)];
-    scrollView.documentView = list;
-
-    NSInteger row = 0;
-    NSString *lastCategory = nil;
-    for (NSDictionary<NSString *, NSString *> *item in [self featureRows]) {
-        NSString *category = item[@"category"];
-        if (![category isEqualToString:lastCategory]) {
-            NSTextField *categoryLabel = [self labelWithText:category size:13 bold:YES color:NSColor.secondaryLabelColor];
-            categoryLabel.frame = NSMakeRect(24, listHeight - 40 - row * 42, 200, 24);
-            [list addSubview:categoryLabel];
-            row += 1;
-            lastCategory = category;
+    [self addPageTitle:@"右键菜单" hint:@"勾选显示功能；置顶项直接出现在菜单顶部。上下按钮调整顺序。" toView:root];
+    NSButton *context = [NSButton checkboxWithTitle:@"只显示适用于所选文件类型的工具" target:self action:@selector(settingsCheckboxChanged:)];
+    context.identifier = @"contextualMenus";
+    context.state = [self.settings[@"contextualMenus"] boolValue] ? NSControlStateValueOn : NSControlStateValueOff;
+    context.frame = NSMakeRect(276, 481, 520, 28);
+    [root addSubview:context];
+    self.menuScrollView = [[NSScrollView alloc] initWithFrame:NSMakeRect(266, 88, 594, 378)];
+    self.menuScrollView.hasVerticalScroller = YES;
+    self.menuScrollView.borderType = NSBezelBorder;
+    [root addSubview:self.menuScrollView];
+    NSArray *rows = [self featureRows];
+    CGFloat height = MAX(378, rows.count * 44 + 20);
+    NSView *list = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 570, height)];
+    self.menuScrollView.documentView = list;
+    for (NSUInteger i = 0; i < rows.count; i++) {
+        NSDictionary *row = rows[i];
+        CGFloat y = height - 46 - i * 44;
+        NSButton *check = [NSButton checkboxWithTitle:row[@"title"] target:self action:@selector(settingsCheckboxChanged:)];
+        check.identifier = row[@"key"];
+        check.state = [self.settings[row[@"key"]] boolValue] ? NSControlStateValueOn : NSControlStateValueOff;
+        check.frame = NSMakeRect(14, y + 8, 320, 26);
+        [list addSubview:check];
+        NSTextField *category = [self labelWithText:row[@"category"] size:10 bold:NO color:NSColor.secondaryLabelColor];
+        category.frame = NSMakeRect(34, y - 3, 270, 14);
+        [list addSubview:category];
+        NSButton *pin = [NSButton checkboxWithTitle:@"置顶" target:self action:@selector(pinFeatureChanged:)];
+        pin.identifier = row[@"key"];
+        pin.state = [self.settings[@"pinnedFeatures"] containsObject:row[@"key"]] ? NSControlStateValueOn : NSControlStateValueOff;
+        pin.frame = NSMakeRect(343, y + 7, 68, 26);
+        [pin setAccessibilityLabel:[row[@"title"] stringByAppendingString:@"：置顶"]];
+        [list addSubview:pin];
+        for (NSInteger delta = -1; delta <= 1; delta += 2) {
+            NSButton *move = [NSButton buttonWithTitle:delta < 0 ? @"↑" : @"↓" target:self action:@selector(moveFeature:)];
+            move.identifier = row[@"key"]; move.tag = delta;
+            move.enabled = delta < 0 ? i > 0 : i + 1 < rows.count;
+            move.frame = NSMakeRect(delta < 0 ? 424 : 470, y + 6, 40, 28);
+            [move setAccessibilityLabel:[NSString stringWithFormat:@"%@：%@", row[@"title"], delta < 0 ? @"上移" : @"下移"]];
+            [list addSubview:move];
         }
-
-        NSButton *checkbox = [NSButton checkboxWithTitle:item[@"title"] target:self action:@selector(settingsCheckboxChanged:)];
-        checkbox.identifier = item[@"key"];
-        checkbox.state = [self.settings[item[@"key"]] boolValue] ? NSControlStateValueOn : NSControlStateValueOff;
-        checkbox.frame = NSMakeRect(24, listHeight - 40 - row * 42, 360, 26);
-        checkbox.font = [NSFont systemFontOfSize:16];
-        [list addSubview:checkbox];
-        row += 1;
     }
-
-    NSButton *allOn = [NSButton buttonWithTitle:@"全部启用" target:self action:@selector(enableAllSettings:)];
-    allOn.frame = NSMakeRect(266, 34, 100, 34);
-    [root addSubview:allOn];
-
-    NSButton *defaults = [NSButton buttonWithTitle:@"恢复默认" target:self action:@selector(resetSettings:)];
-    defaults.frame = NSMakeRect(376, 34, 100, 34);
-    [root addSubview:defaults];
+    [list scrollPoint:NSMakePoint(0, height - 378)];
+    NSButton *all = [NSButton buttonWithTitle:@"全部启用" target:self action:@selector(enableAllSettings:)];
+    all.frame = NSMakeRect(266, 34, 100, 34); [root addSubview:all];
+    NSButton *reset = [NSButton buttonWithTitle:@"重置菜单" target:self action:@selector(resetSettings:)];
+    reset.frame = NSMakeRect(376, 34, 110, 34); [root addSubview:reset];
 }
 
 - (void)addTemplatePageToView:(NSView *)root {
@@ -454,23 +469,34 @@ static NSString * const QRReleasesURL = @"https://github.com/weaiw/QuickRightMen
     self.templatePopup.action = @selector(templateExtensionChanged:);
     [root addSubview:self.templatePopup];
 
-    NSScrollView *scrollView = [[NSScrollView alloc] initWithFrame:NSMakeRect(276, 104, 560, 330)];
+    NSScrollView *scrollView = [[NSScrollView alloc] initWithFrame:NSMakeRect(276, 222, 560, 212)];
     scrollView.hasVerticalScroller = YES;
     scrollView.borderType = NSBezelBorder;
     [root addSubview:scrollView];
 
-    self.templateTextView = [[NSTextView alloc] initWithFrame:NSMakeRect(0, 0, 560, 330)];
+    self.templateTextView = [[NSTextView alloc] initWithFrame:NSMakeRect(0, 0, 560, 212)];
     self.templateTextView.font = [NSFont monospacedSystemFontOfSize:13 weight:NSFontWeightRegular];
     scrollView.documentView = self.templateTextView;
     [self templateExtensionChanged:self.templatePopup];
 
     NSButton *save = [NSButton buttonWithTitle:@"保存模板" target:self action:@selector(saveTemplatePage:)];
-    save.frame = NSMakeRect(276, 48, 110, 34);
+    save.frame = NSMakeRect(276, 174, 110, 34);
     [root addSubview:save];
 
     NSButton *reset = [NSButton buttonWithTitle:@"恢复该类型默认" target:self action:@selector(resetSelectedTemplate:)];
-    reset.frame = NSMakeRect(396, 48, 130, 34);
+    reset.frame = NSMakeRect(396, 174, 130, 34);
     [root addSubview:reset];
+    NSTextField *importLabel = [self labelWithText:@"导入文件或文件夹模板（包括 Office 文件）" size:13 bold:YES color:NSColor.labelColor];
+    importLabel.frame = NSMakeRect(276, 134, 550, 24); [root addSubview:importLabel];
+    self.importedTemplatePopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(276, 94, 330, 30)];
+    for (NSDictionary *entry in self.settings[@"importedTemplates"]) [self.importedTemplatePopup addItemWithTitle:entry[@"name"]];
+    [root addSubview:self.importedTemplatePopup];
+    NSButton *import = [NSButton buttonWithTitle:@"导入…" target:self action:@selector(importTemplate:)];
+    import.frame = NSMakeRect(620, 94, 94, 30); [root addSubview:import];
+    NSButton *remove = [NSButton buttonWithTitle:@"移除" target:self action:@selector(removeImportedTemplate:)];
+    remove.frame = NSMakeRect(724, 94, 90, 30); [root addSubview:remove];
+    NSTextField *help = [self labelWithText:@"导入时保存副本。右键 → 新建文件 → 从导入模板新建。" size:12 bold:NO color:NSColor.secondaryLabelColor];
+    help.frame = NSMakeRect(276, 50, 550, 28); [root addSubview:help];
 }
 
 - (void)addFavoriteDirectoryPageToView:(NSView *)root {
@@ -506,7 +532,7 @@ static NSString * const QRReleasesURL = @"https://github.com/weaiw/QuickRightMen
 }
 
 - (void)addTerminalPageToView:(NSView *)root {
-    [self addPageTitle:@"终端偏好" hint:@"用于“在终端打开”。选择后保存，Finder 右键菜单会使用对应终端。" toView:root];
+    [self addPageTitle:@"打开方式" hint:@"选择终端与常用应用，也可以直接使用 VS Code 或 Cursor。" toView:root];
 
     NSTextField *label = [self labelWithText:@"默认终端" size:13 bold:YES color:NSColor.secondaryLabelColor];
     label.frame = NSMakeRect(276, 486, 120, 22);
@@ -527,6 +553,12 @@ static NSString * const QRReleasesURL = @"https://github.com/weaiw/QuickRightMen
     NSButton *save = [NSButton buttonWithTitle:@"保存偏好" target:self action:@selector(saveTerminalPage:)];
     save.frame = NSMakeRect(276, 402, 110, 34);
     [root addSubview:save];
+    NSString *application = self.settings[@"preferredApplication"];
+    NSTextField *app = [self labelWithText:application.length ? application : @"尚未设置常用应用" size:13 bold:NO color:NSColor.secondaryLabelColor];
+    app.frame = NSMakeRect(276, 300, 550, 44); app.lineBreakMode = NSLineBreakByTruncatingMiddle;
+    [root addSubview:app];
+    NSButton *choose = [NSButton buttonWithTitle:@"选择常用应用…" target:self action:@selector(choosePreferredApplication:)];
+    choose.frame = NSMakeRect(276, 256, 160, 34); [root addSubview:choose];
 }
 
 - (void)addLoginPageToView:(NSView *)root {
@@ -617,11 +649,12 @@ static NSString * const QRReleasesURL = @"https://github.com/weaiw/QuickRightMen
 }
 
 - (void)resetSettings:(id)sender {
-    self.settings = [[self defaultSettings] mutableCopy];
+    for (NSDictionary *row in QRFeatureRows()) self.settings[row[@"key"]] = @YES;
+    self.settings[@"contextualMenus"] = @YES;
+    self.settings[@"menuOrder"] = @[];
+    self.settings[@"pinnedFeatures"] = @[];
     [self saveSettings];
-    [self.settingsWindow close];
-    self.settingsWindow = [self buildSettingsWindow];
-    [self.settingsWindow makeKeyAndOrderFront:nil];
+    [self rebuildSettingsWindow];
 }
 
 - (void)checkForUpdatesSilently {
@@ -715,23 +748,16 @@ static NSString * const QRReleasesURL = @"https://github.com/weaiw/QuickRightMen
 }
 
 - (void)pollCommandFiles:(NSTimer *)timer {
-    NSURL *directory = [self commandDirectoryURL];
-    NSArray<NSURL *> *files = [[NSFileManager defaultManager] contentsOfDirectoryAtURL:directory
-                                                            includingPropertiesForKeys:@[NSURLContentModificationDateKey]
-                                                                               options:NSDirectoryEnumerationSkipsHiddenFiles
-                                                                                 error:nil];
-    for (NSURL *fileURL in files) {
-        if (![fileURL.pathExtension isEqualToString:@"cmd"]) {
-            continue;
-        }
-        if ([self.processedCommandPaths containsObject:fileURL.path]) {
-            continue;
-        }
-
-        [self.processedCommandPaths addObject:fileURL.path];
-        NSString *urlString = [NSString stringWithContentsOfURL:fileURL encoding:NSUTF8StringEncoding error:nil];
-        [self handleCommandURLString:urlString source:@"command file"];
-        [[NSFileManager defaultManager] removeItemAtURL:fileURL error:nil];
+    if (self.busy || NSApp.modalWindow) return;
+    NSArray<NSURL *> *files = [[NSFileManager defaultManager] contentsOfDirectoryAtURL:[self commandDirectoryURL] includingPropertiesForKeys:nil options:NSDirectoryEnumerationSkipsHiddenFiles error:NULL];
+    files = [files sortedArrayUsingComparator:^NSComparisonResult(NSURL *a, NSURL *b) { return [a.lastPathComponent compare:b.lastPathComponent]; }];
+    for (NSURL *file in files) {
+        if (![file.pathExtension isEqualToString:@"cmd"]) continue;
+        NSString *command = [NSString stringWithContentsOfURL:file encoding:NSUTF8StringEncoding error:NULL];
+        if (!command) continue;
+        if (![[NSFileManager defaultManager] removeItemAtURL:file error:NULL]) continue;
+        [self handleCommandURLString:command source:@"command file"];
+        break;
     }
 }
 
@@ -760,9 +786,38 @@ static NSString * const QRReleasesURL = @"https://github.com/weaiw/QuickRightMen
         }
     }
 
-    NSURL *directory = [NSURL fileURLWithPath:params[@"dir"] ?: NSHomeDirectory()];
+    if (self.busy) { [self showError:@"当前操作尚未结束，请稍后再试。"]; return; }
+    NSMutableSet *allowed = [NSMutableSet setWithArray:[QRFeatureRows() valueForKey:@"action"]];
+    [allowed addObject:@"create"];
+    for (NSInteger i = 1; i <= 3; i++) {
+        [allowed addObject:[NSString stringWithFormat:@"copy-to-favorite%ld", (long)i]];
+        [allowed addObject:[NSString stringWithFormat:@"move-to-favorite%ld", (long)i]];
+    }
+    if (![allowed containsObject:command]) return;
+    NSString *directoryPath = params[@"dir"] ?: NSHomeDirectory();
+    BOOL isDirectory = NO;
+    if (!directoryPath.isAbsolutePath || ![[NSFileManager defaultManager] fileExistsAtPath:directoryPath isDirectory:&isDirectory] || !isDirectory) {
+        [self showError:@"目标文件夹不存在或无法访问。"]; return;
+    }
+    NSURL *directory = [NSURL fileURLWithPath:directoryPath];
+    NSArray *selected = [self pathListFromString:params[@"paths"] fallback:nil];
+    if ([source isEqualToString:@"URL event"]) {
+        NSAlert *confirm = [[NSAlert alloc] init]; confirm.messageText = @"执行外部链接请求的文件操作？";
+        confirm.informativeText = [NSString stringWithFormat:@"操作：%@\n目录：%@\n所选文件：%lu", command, directory.path, (unsigned long)selected.count];
+        [confirm addButtonWithTitle:@"执行"]; [confirm addButtonWithTitle:@"取消"];
+        [NSApp activateIgnoringOtherApps:YES]; if ([confirm runModal] != NSAlertFirstButtonReturn) return;
+    }
+    if ([command hasPrefix:@"clipboard-"]) { [self saveClipboardAtDirectory:directory format:[command substringFromIndex:10]]; return; }
+    if ([command hasPrefix:@"open-"]) { [self openPaths:selected directory:directory action:command]; return; }
+    if ([command isEqualToString:@"project-create"] || [command isEqualToString:@"template-create"]) { [self createFromTemplateAtDirectory:directory imported:[command isEqualToString:@"template-create"]]; return; }
+    if ([command hasPrefix:@"manifest-"]) { [self exportManifest:selected directory:directory format:[command substringFromIndex:9]]; return; }
+    if ([command isEqualToString:@"pdf-images"] || [command isEqualToString:@"pdf-merge"]) { [self makePDF:selected directory:directory images:[command isEqualToString:@"pdf-images"]]; return; }
+    if ([command isEqualToString:@"image-ocr"]) { [self recognizeImages:selected]; return; }
+    if ([command isEqualToString:@"undo-last"]) { [self undoLastOperation:nil]; return; }
+    if ([@[@"image-resize", @"image-target-size", @"image-strip-metadata", @"image-watermark", @"workflow-run"] containsObject:command]) { [self processImages:selected action:command]; return; }
     if ([command isEqualToString:@"create"]) {
         NSString *extension = params[@"ext"] ?: @"txt";
+        if (![@[@"txt", @"md", @"json", @"csv", @"html", @"yaml", @"xml", @"sh", @"py", @"js", @"ts", @"css", @"docx", @"xlsx", @"pptx"] containsObject:extension]) { [self showError:@"不支持该文件类型。"]; return; }
         NSString *contents = [self templateForExtension:extension];
         [self createFileInDirectory:directory baseName:@"Untitled" extension:extension contents:contents];
     } else if ([command isEqualToString:@"copy-path"]) {
@@ -851,7 +906,7 @@ static NSString * const QRReleasesURL = @"https://github.com/weaiw/QuickRightMen
     }
 
     NSError *error = nil;
-    BOOL ok = [contents writeToURL:fileURL atomically:YES encoding:NSUTF8StringEncoding error:&error];
+    BOOL ok = QRWriteNewData([contents dataUsingEncoding:NSUTF8StringEncoding], fileURL, &error);
     if (ok) {
         [self log:[NSString stringWithFormat:@"created %@", fileURL.path]];
         [[NSWorkspace sharedWorkspace] activateFileViewerSelectingURLs:@[fileURL]];
@@ -875,12 +930,10 @@ static NSString * const QRReleasesURL = @"https://github.com/weaiw/QuickRightMen
     if (prepared) {
         prepared = [self writeOfficePackageAtURL:tempURL extension:extension error:&error];
     }
-    if (prepared && [fileManager fileExistsAtPath:fileURL.path]) {
-        [fileManager removeItemAtURL:fileURL error:nil];
-    }
-    if (prepared) {
-        prepared = [self zipDirectoryAtURL:tempURL toURL:fileURL error:&error];
-    }
+    NSURL *zipURL = [NSURL fileURLWithPath:[tempRoot stringByAppendingString:@".zip"]];
+    if (prepared) prepared = [self zipDirectoryAtURL:tempURL toURL:zipURL error:&error];
+    if (prepared) prepared = [fileManager moveItemAtURL:zipURL toURL:fileURL error:&error];
+    [fileManager removeItemAtURL:zipURL error:NULL];
     [fileManager removeItemAtURL:tempURL error:nil];
 
     if (prepared) {
@@ -947,8 +1000,10 @@ static NSString * const QRReleasesURL = @"https://github.com/weaiw/QuickRightMen
     return YES;
 }
 
+- (NSPasteboard *)pasteboard { return NSPasteboard.generalPasteboard; }
+
 - (void)copyValueToPasteboard:(NSString *)value label:(NSString *)label {
-    NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
+    NSPasteboard *pasteboard = [self pasteboard];
     [pasteboard clearContents];
     [pasteboard setString:value ?: @"" forType:NSPasteboardTypeString];
     [self log:[NSString stringWithFormat:@"copied %@ %@", label, value ?: @""]];
@@ -976,67 +1031,28 @@ static NSString * const QRReleasesURL = @"https://github.com/weaiw/QuickRightMen
 }
 
 - (NSArray<NSString *> *)pathListFromString:(NSString *)paths fallback:(NSString *)fallback {
-    NSMutableArray<NSString *> *items = [NSMutableArray array];
-    NSArray<NSString *> *rawItems = paths.length > 0 ? [paths componentsSeparatedByString:@"\n"] : @[];
-    for (NSString *path in rawItems) {
-        if (path.length > 0) {
-            [items addObject:path];
-        }
-    }
-    if (items.count == 0 && fallback.length > 0) {
-        [items addObject:fallback];
-    }
-    return items;
+    NSArray *items = QRPathsFromString(paths);
+    return items.count ? items : (paths.length ? @[] : (fallback.length ? @[fallback] : @[]));
 }
 
 - (void)transferPaths:(NSString *)paths directory:(NSURL *)directory destinationKey:(NSString *)destinationKey move:(BOOL)move {
-    [self log:[NSString stringWithFormat:@"transfer move=%@ destination=%@ paths=%@ directory=%@",
-               move ? @"YES" : @"NO",
-               destinationKey ?: @"",
-               paths ?: @"",
-               directory.path ?: @""]];
-
-    NSURL *destinationDirectory = [destinationKey.lowercaseString isEqualToString:@"choose"]
-        ? [self chooseDestinationDirectoryForMove:move]
-        : [self destinationDirectoryForKey:destinationKey];
-    if (!destinationDirectory) {
-        return;
-    }
-
-    NSArray<NSString *> *items = [self pathListFromString:paths fallback:nil];
-    if (items.count == 0) {
-        [self log:@"transfer failed: empty selected paths"];
-        [self showError:@"没有拿到选中的文件。请先选中文件后再用“复制到/移动到”。"];
-        return;
-    }
-
-    NSFileManager *fileManager = [NSFileManager defaultManager];
-    NSError *directoryError = nil;
-    [fileManager createDirectoryAtURL:destinationDirectory withIntermediateDirectories:YES attributes:nil error:&directoryError];
-    if (directoryError) {
-        [self showError:[NSString stringWithFormat:@"创建目标目录失败：%@", directoryError.localizedDescription]];
-        return;
-    }
-
-    NSMutableArray<NSURL *> *completedURLs = [NSMutableArray array];
-    for (NSString *path in items) {
-        NSURL *sourceURL = [NSURL fileURLWithPath:path];
-        NSURL *targetURL = [self uniqueDestinationURLForSourceURL:sourceURL inDirectory:destinationDirectory];
-        NSError *error = nil;
-        BOOL ok = move ? [fileManager moveItemAtURL:sourceURL toURL:targetURL error:&error] : [fileManager copyItemAtURL:sourceURL toURL:targetURL error:&error];
-        if (!ok || error) {
-            NSString *verb = move ? @"移动" : @"复制";
-            [self log:[NSString stringWithFormat:@"transfer failed %@ -> %@ %@", sourceURL.path, targetURL.path, error.localizedDescription ?: @"unknown"]];
-            [self showError:[NSString stringWithFormat:@"%@失败：%@\n%@", verb, sourceURL.path, error.localizedDescription ?: @"未知错误"]];
-            return;
+    NSURL *destination = [destinationKey isEqualToString:@"choose"] ? [self chooseDestinationDirectoryForMove:move] : [self destinationDirectoryForKey:destinationKey];
+    if (!destination) return;
+    NSArray *items = [self pathListFromString:paths fallback:nil];
+    [self runBatch:move ? @"移动文件" : @"复制文件" items:items operation:^NSDictionary *(NSString *path, NSProgress *progress, NSError **error) {
+        NSFileManager *fm = [NSFileManager defaultManager];
+        NSString *from = [NSURL fileURLWithPath:path].URLByResolvingSymlinksInPath.path;
+        NSString *to = destination.URLByResolvingSymlinksInPath.path;
+        if ([to isEqualToString:from] || [to hasPrefix:[from stringByAppendingString:@"/"]]) { *error = QRError(@"不能复制或移动到自身内部"); return nil; }
+        if (move && [path.stringByDeletingLastPathComponent isEqualToString:destination.path]) return @{@"message": @"已在目标文件夹，未移动"};
+        if (![fm createDirectoryAtURL:destination withIntermediateDirectories:YES attributes:nil error:error]) return nil;
+        NSURL *target = QRUniqueURL(destination, path.lastPathComponent);
+        if (move) {
+            NSDictionary *undo = QRMoveFile(path, target.path, error);
+            return undo ? @{@"output": target.path, @"undo": undo} : nil;
         }
-        [self log:[NSString stringWithFormat:@"transfer ok %@ -> %@", sourceURL.path, targetURL.path]];
-        [completedURLs addObject:targetURL];
-    }
-
-    if (completedURLs.count > 0) {
-        [[NSWorkspace sharedWorkspace] activateFileViewerSelectingURLs:completedURLs];
-    }
+        return [fm copyItemAtPath:path toPath:target.path error:error] ? @{@"output": target.path} : nil;
+    } completion:nil];
 }
 
 - (NSURL *)chooseDestinationDirectoryForMove:(BOOL)move {
@@ -1085,104 +1101,62 @@ static NSString * const QRReleasesURL = @"https://github.com/weaiw/QuickRightMen
 }
 
 - (NSURL *)uniqueDestinationURLForSourceURL:(NSURL *)sourceURL inDirectory:(NSURL *)directory {
-    NSString *filename = sourceURL.lastPathComponent.length > 0 ? sourceURL.lastPathComponent : @"Untitled";
-    NSURL *candidate = [directory URLByAppendingPathComponent:filename];
-    if (![[NSFileManager defaultManager] fileExistsAtPath:candidate.path]) {
-        return candidate;
-    }
-
-    NSString *extension = filename.pathExtension;
-    NSString *baseName = extension.length > 0 ? filename.stringByDeletingPathExtension : filename;
-    NSInteger index = 2;
-    while ([[NSFileManager defaultManager] fileExistsAtPath:candidate.path]) {
-        NSString *nextName = extension.length > 0
-            ? [NSString stringWithFormat:@"%@ %ld.%@", baseName, (long)index, extension]
-            : [NSString stringWithFormat:@"%@ %ld", baseName, (long)index];
-        candidate = [directory URLByAppendingPathComponent:nextName];
-        index += 1;
-    }
-    return candidate;
+    return QRUniqueURL(directory, sourceURL.lastPathComponent);
 }
 
 - (void)batchRenamePaths:(NSString *)paths directory:(NSURL *)directory {
-    NSArray<NSString *> *items = [[self pathListFromString:paths fallback:nil] sortedArrayUsingSelector:@selector(localizedStandardCompare:)];
-    if (items.count == 0) {
-        [self showError:@"没有拿到选中的文件。请先选中文件后再批量重命名。"];
-        return;
+    NSArray *items = [self pathListFromString:paths fallback:nil];
+    if (!items.count) { [self showError:@"请先选中需要重命名的文件。"]; return; }
+    NSAlert *alert = [[NSAlert alloc] init]; alert.messageText = @"批量重命名";
+    alert.informativeText = @"保留文件扩展名。先预览，再执行；名称冲突时不会覆盖文件。";
+    [alert addButtonWithTitle:@"预览"]; [alert addButtonWithTitle:@"取消"];
+    NSView *form = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 500, 170)];
+    NSPopUpButton *mode = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(0, 132, 490, 30)];
+    [mode addItemsWithTitles:@[@"前缀＋序号", @"添加前缀", @"添加后缀", @"查找替换", @"添加今天日期"]];
+    [mode setAccessibilityLabel:@"重命名方式"]; [form addSubview:mode];
+    NSTextField *text = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 90, 490, 28)];
+    text.placeholderString = @"前缀、后缀或查找内容"; [text setAccessibilityLabel:@"前缀、后缀或查找内容"]; [form addSubview:text];
+    NSTextField *replacement = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 48, 490, 28)];
+    replacement.placeholderString = @"替换为（仅查找替换使用，可留空）"; [replacement setAccessibilityLabel:@"替换为"]; [form addSubview:replacement];
+    NSTextField *start = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 6, 490, 28)];
+    start.stringValue = @"1"; start.placeholderString = @"起始序号"; [start setAccessibilityLabel:@"起始序号"]; [form addSubview:start];
+    alert.accessoryView = form; [NSApp activateIgnoringOtherApps:YES];
+    if ([alert runModal] != NSAlertFirstButtonReturn) return;
+    NSInteger number = 0; NSScanner *scan = [NSScanner scannerWithString:start.stringValue];
+    if (![scan scanInteger:&number] || !scan.isAtEnd || number < 1 || number > 100000000) { [self showError:@"起始序号须为 1–100000000 的整数。"]; return; }
+    NSDictionary *options = @{@"mode": @[@"number", @"prefix", @"suffix", @"replace", @"date"][mode.indexOfSelectedItem], @"text": text.stringValue, @"replacement": replacement.stringValue, @"start": @(number)};
+    NSError *error = nil;
+    NSArray *plan = QRRenamePlan(items, options, &error);
+    if (!plan) { [self showError:error.localizedDescription]; return; }
+    NSMutableString *preview = [NSMutableString string];
+    NSMutableDictionary *lookup = [NSMutableDictionary dictionary];
+    NSMutableArray *changed = [NSMutableArray array];
+    for (NSDictionary *entry in plan) {
+        [preview appendFormat:@"%@ → %@%@\n", [entry[@"source"] lastPathComponent], [entry[@"target"] lastPathComponent], [entry[@"unchanged"] boolValue] ? @"（不变）" : @""];
+        lookup[entry[@"source"]] = entry;
+        if (![entry[@"unchanged"] boolValue]) [changed addObject:entry[@"source"]];
     }
-
-    NSAlert *alert = [[NSAlert alloc] init];
-    alert.messageText = @"批量重命名";
-    alert.informativeText = @"输入新文件名前缀。会保留原扩展名，并自动添加 001、002、003。";
-    [alert addButtonWithTitle:@"重命名"];
-    [alert addButtonWithTitle:@"取消"];
-    NSTextField *input = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 280, 28)];
-    input.stringValue = @"文件";
-    alert.accessoryView = input;
-    [NSApp activateIgnoringOtherApps:YES];
-    NSModalResponse response = [alert runModal];
-    if (response != NSAlertFirstButtonReturn) {
-        return;
-    }
-
-    NSString *prefix = [input.stringValue stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
-    if (prefix.length == 0) {
-        [self showError:@"文件名前缀不能为空"];
-        return;
-    }
-
-    NSFileManager *fileManager = [NSFileManager defaultManager];
-    NSMutableArray<NSURL *> *renamedURLs = [NSMutableArray array];
-    NSInteger index = 1;
-    NSString *countString = [NSString stringWithFormat:@"%lu", (unsigned long)items.count];
-    NSInteger width = MAX(3, (NSInteger)countString.length);
-    for (NSString *path in items) {
-        NSURL *sourceURL = [NSURL fileURLWithPath:path];
-        NSString *extension = sourceURL.pathExtension;
-        NSString *number = [NSString stringWithFormat:@"%0*ld", (int)width, (long)index];
-        NSString *filename = extension.length > 0
-            ? [NSString stringWithFormat:@"%@ %@.%@", prefix, number, extension]
-            : [NSString stringWithFormat:@"%@ %@", prefix, number];
-        NSURL *targetURL = [sourceURL.URLByDeletingLastPathComponent URLByAppendingPathComponent:filename];
-        targetURL = [self uniqueDestinationURLForSourceURL:targetURL inDirectory:sourceURL.URLByDeletingLastPathComponent];
-        NSError *error = nil;
-        BOOL ok = [fileManager moveItemAtURL:sourceURL toURL:targetURL error:&error];
-        if (!ok || error) {
-            [self showError:[NSString stringWithFormat:@"重命名失败：%@\n%@", sourceURL.path, error.localizedDescription ?: @"未知错误"]];
-            return;
-        }
-        [renamedURLs addObject:targetURL];
-        index += 1;
-    }
-
-    if (renamedURLs.count > 0) {
-        [[NSWorkspace sharedWorkspace] activateFileViewerSelectingURLs:renamedURLs];
-    }
+    if (!changed.count) { [self showInfo:@"所有名称均未变化" details:@"请调整重命名规则。"]; return; }
+    NSAlert *confirm = [[NSAlert alloc] init]; confirm.messageText = [NSString stringWithFormat:@"确认重命名 %lu 项", (unsigned long)changed.count];
+    [confirm addButtonWithTitle:@"执行重命名"]; [confirm addButtonWithTitle:@"取消"];
+    NSScrollView *scroll = [[NSScrollView alloc] initWithFrame:NSMakeRect(0, 0, 600, 300)]; scroll.hasVerticalScroller = YES;
+    NSTextView *view = [[NSTextView alloc] initWithFrame:scroll.contentView.bounds]; view.editable = NO; view.string = preview;
+    view.font = [NSFont monospacedSystemFontOfSize:12 weight:NSFontWeightRegular]; scroll.documentView = view; confirm.accessoryView = scroll;
+    if ([confirm runModal] != NSAlertFirstButtonReturn) return;
+    [self runBatch:@"批量重命名" items:changed operation:^NSDictionary *(NSString *path, NSProgress *progress, NSError **failure) {
+        NSString *target = lookup[path][@"target"];
+        NSDictionary *undo = QRMoveFile(path, target, failure);
+        return undo ? @{@"output": target, @"undo": undo} : nil;
+    } completion:nil];
 }
 
 - (void)copyImageSizesForPaths:(NSString *)paths directory:(NSURL *)directory {
-    NSArray<NSString *> *items = [self pathListFromString:paths fallback:nil];
-    if (items.count == 0) {
-        [self showError:@"没有拿到选中的图片文件"];
-        return;
-    }
-
-    NSMutableArray<NSString *> *lines = [NSMutableArray array];
-    for (NSString *path in items) {
+    [self runBatch:@"读取图片尺寸" items:[self pathListFromString:paths fallback:nil] operation:^NSDictionary *(NSString *path, NSProgress *progress, NSError **error) {
         NSDictionary *info = [self imageInfoAtPath:path];
-        if (!info) {
-            continue;
-        }
-        [lines addObject:[NSString stringWithFormat:@"%@: %@ x %@ px", path.lastPathComponent, info[@"width"], info[@"height"]]];
-    }
-    if (lines.count == 0) {
-        [self showError:@"没有识别到可读取尺寸的图片"];
-        return;
-    }
-
-    NSString *result = [lines componentsJoinedByString:@"\n"];
-    [self copyValueToPasteboard:result label:@"image sizes"];
-    [self showInfo:@"图片尺寸已复制" details:result];
+        if (!info) { *error = QRError(@"无法读取图片尺寸"); return nil; }
+        NSString *text = [NSString stringWithFormat:@"%@: %@ × %@ px", path.lastPathComponent, info[@"width"], info[@"height"]];
+        return @{@"text": text, @"message": text};
+    } completion:^(NSArray *results) { [self copyBatchText:results title:@"图片尺寸（已复制）"]; }];
 }
 
 - (NSDictionary *)imageInfoAtPath:(NSString *)path {
@@ -1206,159 +1180,37 @@ static NSString * const QRReleasesURL = @"https://github.com/weaiw/QuickRightMen
 }
 
 - (void)convertImagesForPaths:(NSString *)paths directory:(NSURL *)directory format:(NSString *)format {
-    NSArray<NSString *> *items = [self pathListFromString:paths fallback:nil];
-    if (items.count == 0) {
-        [self showError:@"没有拿到选中的图片文件"];
-        return;
-    }
-
-    NSMutableArray<NSURL *> *createdURLs = [NSMutableArray array];
-    for (NSString *path in items) {
-        NSURL *sourceURL = [NSURL fileURLWithPath:path];
-        NSURL *targetURL = [self imageTargetURLForSourceURL:sourceURL format:format];
-        NSString *uti = [self imageUTIForFormat:format];
-        CGFloat quality = [format isEqualToString:@"jpg-compressed"] ? 0.72 : 0.9;
-        NSError *error = nil;
-        BOOL ok = [self writeImageAtURL:sourceURL toURL:targetURL uti:uti quality:quality error:&error];
-        if (!ok || error) {
-            [self showError:[NSString stringWithFormat:@"图片处理失败：%@\n%@", sourceURL.path, error.localizedDescription ?: @"当前系统可能不支持该格式写入"]];
-            return;
-        }
-        [createdURLs addObject:targetURL];
-    }
-
-    if (createdURLs.count > 0) {
-        [[NSWorkspace sharedWorkspace] activateFileViewerSelectingURLs:createdURLs];
-    }
-}
-
-- (NSString *)imageUTIForFormat:(NSString *)format {
-    if ([format isEqualToString:@"png"]) {
-        return @"public.png";
-    }
-    if ([format isEqualToString:@"webp"]) {
-        return @"org.webmproject.webp";
-    }
-    return @"public.jpeg";
-}
-
-- (NSURL *)imageTargetURLForSourceURL:(NSURL *)sourceURL format:(NSString *)format {
-    NSString *extension = @"jpg";
-    NSString *suffix = @"";
-    if ([format isEqualToString:@"png"]) {
-        extension = @"png";
-    } else if ([format isEqualToString:@"webp"]) {
-        extension = @"webp";
-    } else if ([format isEqualToString:@"jpg-compressed"]) {
-        extension = @"jpg";
-        suffix = @"-compressed";
-    }
-    NSString *baseName = sourceURL.lastPathComponent.stringByDeletingPathExtension;
-    NSString *filename = [NSString stringWithFormat:@"%@%@.%@", baseName.length > 0 ? baseName : @"Untitled", suffix, extension];
-    NSURL *targetURL = [sourceURL.URLByDeletingLastPathComponent URLByAppendingPathComponent:filename];
-    return [self uniqueDestinationURLForSourceURL:targetURL inDirectory:sourceURL.URLByDeletingLastPathComponent];
-}
-
-- (BOOL)writeImageAtURL:(NSURL *)sourceURL toURL:(NSURL *)targetURL uti:(NSString *)uti quality:(CGFloat)quality error:(NSError **)error {
-    CGImageSourceRef source = CGImageSourceCreateWithURL((__bridge CFURLRef)sourceURL, NULL);
-    if (!source) {
-        if (error) {
-            *error = [NSError errorWithDomain:@"QuickRightMenu" code:1 userInfo:@{NSLocalizedDescriptionKey: @"无法读取图片"}];
-        }
-        return NO;
-    }
-    CGImageRef image = CGImageSourceCreateImageAtIndex(source, 0, NULL);
-    CFRelease(source);
-    if (!image) {
-        if (error) {
-            *error = [NSError errorWithDomain:@"QuickRightMenu" code:2 userInfo:@{NSLocalizedDescriptionKey: @"无法解码图片"}];
-        }
-        return NO;
-    }
-
-    CGImageDestinationRef destination = CGImageDestinationCreateWithURL((__bridge CFURLRef)targetURL, (__bridge CFStringRef)uti, 1, NULL);
-    if (!destination) {
-        CGImageRelease(image);
-        if (error) {
-            *error = [NSError errorWithDomain:@"QuickRightMenu" code:3 userInfo:@{NSLocalizedDescriptionKey: @"当前系统不支持写入该图片格式"}];
-        }
-        return NO;
-    }
-
-    NSDictionary *options = @{(NSString *)kCGImageDestinationLossyCompressionQuality: @(quality)};
-    CGImageDestinationAddImage(destination, image, (__bridge CFDictionaryRef)options);
-    BOOL ok = CGImageDestinationFinalize(destination);
-    CFRelease(destination);
-    CGImageRelease(image);
-    if (!ok && error) {
-        *error = [NSError errorWithDomain:@"QuickRightMenu" code:4 userInfo:@{NSLocalizedDescriptionKey: @"图片写入失败"}];
-    }
-    return ok;
+    NSDictionary *options = @{@"format": [format isEqualToString:@"jpg-compressed"] ? @"jpg" : format,
+                               @"quality": [format isEqualToString:@"jpg-compressed"] ? @0.72 : @0.9};
+    [self runImageBatch:[self pathListFromString:paths fallback:nil] options:options title:@"处理图片"];
 }
 
 - (void)showTextStatsForPaths:(NSString *)paths directory:(NSURL *)directory {
-    NSArray<NSString *> *items = [self pathListFromString:paths fallback:nil];
-    if (items.count == 0) {
-        [self showError:@"没有拿到选中的文本文件"];
-        return;
-    }
-
-    NSMutableArray<NSString *> *lines = [NSMutableArray array];
-    for (NSString *path in items) {
-        NSString *text = [self textContentsAtPath:path usedEncoding:nil];
-        if (!text) {
-            continue;
-        }
-        NSUInteger chars = [[text stringByReplacingOccurrencesOfString:@"\\s" withString:@"" options:NSRegularExpressionSearch range:NSMakeRange(0, text.length)] length];
-        NSArray<NSString *> *words = [text componentsSeparatedByCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
-        NSUInteger wordCount = 0;
-        for (NSString *word in words) {
-            if (word.length > 0) {
-                wordCount += 1;
-            }
-        }
-        NSUInteger linesCount = [[text componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet] count];
-        [lines addObject:[NSString stringWithFormat:@"%@: 字符 %lu，词 %lu，行 %lu", path.lastPathComponent, (unsigned long)chars, (unsigned long)wordCount, (unsigned long)linesCount]];
-    }
-    if (lines.count == 0) {
-        [self showError:@"没有可读取的文本文件"];
-        return;
-    }
-
-    NSString *result = [lines componentsJoinedByString:@"\n"];
-    [self copyValueToPasteboard:result label:@"text stats"];
-    [self showInfo:@"字数统计已复制" details:result];
+    [self runBatch:@"统计文本" items:[self pathListFromString:paths fallback:nil] operation:^NSDictionary *(NSString *path, NSProgress *progress, NSError **error) {
+        NSString *text = [self textContentsAtPath:path usedEncoding:NULL];
+        if (!text) { *error = QRError(@"无法读取文本或识别编码"); return nil; }
+        NSString *normalized = [[text stringByReplacingOccurrencesOfString:@"\r\n" withString:@"\n"] stringByReplacingOccurrencesOfString:@"\r" withString:@"\n"];
+        __block NSUInteger characters = 0;
+        [text enumerateSubstringsInRange:NSMakeRange(0, text.length) options:NSStringEnumerationByComposedCharacterSequences usingBlock:^(NSString *substring, NSRange range, NSRange enclosing, BOOL *stop) {
+            if ([substring stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet].length) characters++;
+            if (progress.cancelled) *stop = YES;
+        }];
+        if (progress.cancelled) { *error = QRError(@"已取消"); return nil; }
+        NSUInteger words = 0;
+        for (NSString *word in [text componentsSeparatedByCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet]) if (word.length) words++;
+        NSUInteger lines = normalized.length ? [normalized componentsSeparatedByString:@"\n"].count : 0;
+        NSString *result = [NSString stringWithFormat:@"%@: 字符 %lu，空白分隔词 %lu，行 %lu", path.lastPathComponent, (unsigned long)characters, (unsigned long)words, (unsigned long)lines];
+        return @{@"text": result, @"message": result};
+    } completion:^(NSArray *results) { [self copyBatchText:results title:@"文本统计（已复制）"]; }];
 }
 
 - (void)convertTextFilesToUTF8ForPaths:(NSString *)paths directory:(NSURL *)directory {
-    NSArray<NSString *> *items = [self pathListFromString:paths fallback:nil];
-    if (items.count == 0) {
-        [self showError:@"没有拿到选中的文本文件"];
-        return;
-    }
-
-    NSMutableArray<NSURL *> *createdURLs = [NSMutableArray array];
-    for (NSString *path in items) {
-        NSStringEncoding encoding = 0;
-        NSString *text = [self textContentsAtPath:path usedEncoding:&encoding];
-        if (!text) {
-            [self showError:[NSString stringWithFormat:@"无法读取文本：%@", path]];
-            return;
-        }
-        NSURL *sourceURL = [NSURL fileURLWithPath:path];
-        NSURL *targetURL = [self utf8TargetURLForSourceURL:sourceURL];
-        NSError *error = nil;
-        BOOL ok = [text writeToURL:targetURL atomically:YES encoding:NSUTF8StringEncoding error:&error];
-        if (!ok || error) {
-            [self showError:[NSString stringWithFormat:@"转 UTF-8 失败：%@\n%@", path, error.localizedDescription ?: @"未知错误"]];
-            return;
-        }
-        [createdURLs addObject:targetURL];
-    }
-
-    if (createdURLs.count > 0) {
-        [[NSWorkspace sharedWorkspace] activateFileViewerSelectingURLs:createdURLs];
-    }
+    [self runBatch:@"转 UTF-8" items:[self pathListFromString:paths fallback:nil] operation:^NSDictionary *(NSString *path, NSProgress *progress, NSError **error) {
+        NSString *text = [self textContentsAtPath:path usedEncoding:NULL];
+        if (!text) { *error = QRError(@"无法读取文本或识别编码"); return nil; }
+        NSURL *target = [self utf8TargetURLForSourceURL:[NSURL fileURLWithPath:path]];
+        return QRWriteNewData([text dataUsingEncoding:NSUTF8StringEncoding], target, error) ? @{@"output": target.path} : nil;
+    } completion:nil];
 }
 
 - (NSURL *)utf8TargetURLForSourceURL:(NSURL *)sourceURL {
@@ -1372,20 +1224,16 @@ static NSString * const QRReleasesURL = @"https://github.com/weaiw/QuickRightMen
 }
 
 - (void)previewTextForPaths:(NSString *)paths directory:(NSURL *)directory {
-    NSArray<NSString *> *items = [self pathListFromString:paths fallback:nil];
-    if (items.count == 0) {
-        [self showError:@"没有拿到选中的文本文件"];
-        return;
-    }
-
-    NSString *path = items.firstObject;
-    NSString *text = [self textContentsAtPath:path usedEncoding:nil];
-    if (!text) {
-        [self showError:[NSString stringWithFormat:@"无法读取文本：%@", path]];
-        return;
-    }
-
-    [self showTextPreview:text title:path.lastPathComponent ?: @"文本预览"];
+    NSArray *items = [self pathListFromString:paths fallback:nil];
+    if (!items.count) { [self showError:@"请选择文本文件。"]; return; }
+    [self runBatch:@"读取文本预览" items:@[items.firstObject] operation:^NSDictionary *(NSString *path, NSProgress *progress, NSError **error) {
+        NSString *text = [self textContentsAtPath:path usedEncoding:NULL];
+        if (!text) { *error = QRError(@"无法读取文本或识别编码"); return nil; }
+        return @{@"text": text, @"message": @"文本已读取"};
+    } completion:^(NSArray *results) {
+        NSString *text = [results.firstObject objectForKey:@"text"];
+        if (text) [self showTextPreview:text title:[items.firstObject lastPathComponent]];
+    }];
 }
 
 - (void)showTemplateSettings:(id)sender {
@@ -1569,13 +1417,7 @@ static NSString * const QRReleasesURL = @"https://github.com/weaiw/QuickRightMen
 }
 
 - (NSURL *)uniqueFileURLInDirectory:(NSURL *)directory baseName:(NSString *)baseName extension:(NSString *)extension {
-    NSURL *candidate = [directory URLByAppendingPathComponent:[NSString stringWithFormat:@"%@.%@", baseName, extension]];
-    NSInteger index = 2;
-    while ([[NSFileManager defaultManager] fileExistsAtPath:candidate.path]) {
-        candidate = [directory URLByAppendingPathComponent:[NSString stringWithFormat:@"%@ %ld.%@", baseName, (long)index, extension]];
-        index += 1;
-    }
-    return candidate;
+    return QRUniqueURL(directory, [baseName stringByAppendingPathExtension:extension]);
 }
 
 - (void)openTerminalAtDirectory:(NSURL *)directory {
@@ -1643,6 +1485,459 @@ static NSString * const QRReleasesURL = @"https://github.com/weaiw/QuickRightMen
         [alert addButtonWithTitle:@"OK"];
         [alert runModal];
     });
+}
+
+- (void)pinFeatureChanged:(NSButton *)sender {
+    NSMutableArray *pins = [self.settings[@"pinnedFeatures"] mutableCopy];
+    [pins removeObject:sender.identifier];
+    if (sender.state == NSControlStateValueOn) [pins addObject:sender.identifier];
+    self.settings[@"pinnedFeatures"] = pins;
+    [self saveSettings];
+}
+
+- (void)moveFeature:(NSButton *)sender {
+    NSPoint origin = self.menuScrollView.contentView.bounds.origin;
+    NSMutableArray *order = [[[self featureRows] valueForKey:@"key"] mutableCopy];
+    NSInteger index = [order indexOfObject:sender.identifier], other = index + sender.tag;
+    if (index == NSNotFound || other < 0 || other >= order.count) return;
+    [order exchangeObjectAtIndex:index withObjectAtIndex:other];
+    self.settings[@"menuOrder"] = order;
+    [self saveSettings];
+    [self rebuildSettingsWindow];
+    [self.menuScrollView.documentView scrollPoint:origin];
+}
+
+- (NSTextField *)inputWithValue:(NSString *)value label:(NSString *)label y:(CGFloat)y inView:(NSView *)root {
+    NSTextField *caption = [self labelWithText:label size:13 bold:NO color:NSColor.labelColor];
+    caption.frame = NSMakeRect(276, y, 170, 26); [root addSubview:caption];
+    NSTextField *input = [[NSTextField alloc] initWithFrame:NSMakeRect(448, y, 388, 26)];
+    input.stringValue = value ?: @"";
+    [input setAccessibilityLabel:label];
+    [root addSubview:input];
+    return input;
+}
+
+- (void)addPresetPageToView:(NSView *)root {
+    [self addPageTitle:@"图片处理组合" hint:@"保存常用设置，再从图片右键菜单一次执行。原图始终保留。" toView:root];
+    self.presetPopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(276, 476, 330, 30)];
+    for (NSDictionary *preset in self.settings[@"imagePresets"]) [self.presetPopup addItemWithTitle:preset[@"name"]];
+    self.presetPopup.target = self; self.presetPopup.action = @selector(presetSelectionChanged:);
+    [self.presetPopup setAccessibilityLabel:@"已保存的处理组合"];
+    [root addSubview:self.presetPopup];
+    NSButton *add = [NSButton buttonWithTitle:@"新建" target:self action:@selector(newPreset:)];
+    add.frame = NSMakeRect(620, 476, 88, 30); [root addSubview:add];
+    NSButton *remove = [NSButton buttonWithTitle:@"删除" target:self action:@selector(deletePreset:)];
+    remove.frame = NSMakeRect(720, 476, 88, 30); [root addSubview:remove];
+    self.presetName = [self inputWithValue:@"" label:@"组合名称" y:427 inView:root];
+    self.presetMaxSide = [self inputWithValue:@"1920" label:@"最长边 px（0 不缩放）" y:383 inView:root];
+    self.presetTargetMB = [self inputWithValue:@"1" label:@"目标 MB（0 不限）" y:339 inView:root];
+    NSTextField *format = [self labelWithText:@"输出格式" size:13 bold:NO color:NSColor.labelColor];
+    format.frame = NSMakeRect(276, 295, 170, 26); [root addSubview:format];
+    self.presetFormat = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(448, 295, 160, 28)];
+    [self.presetFormat addItemsWithTitles:@[@"JPEG", @"PNG"]];
+    [self.presetFormat setAccessibilityLabel:@"输出格式"]; [root addSubview:self.presetFormat];
+    self.presetStripMetadata = [NSButton checkboxWithTitle:@"去除定位、相机等元数据" target:nil action:nil];
+    self.presetStripMetadata.frame = NSMakeRect(448, 251, 385, 28); [root addSubview:self.presetStripMetadata];
+    self.presetWatermark = [self inputWithValue:@"" label:@"水印文字（可留空）" y:207 inView:root];
+    self.presetDirectory = [self inputWithValue:@"" label:@"输出文件夹" y:163 inView:root];
+    self.presetDirectory.editable = NO; self.presetDirectory.selectable = YES;
+    self.presetDirectory.placeholderString = @"原文件旁的“已处理”文件夹";
+    NSButton *choose = [NSButton buttonWithTitle:@"选择输出目录…" target:self action:@selector(choosePresetDirectory:)];
+    choose.frame = NSMakeRect(448, 117, 155, 30); [root addSubview:choose];
+    NSButton *clear = [NSButton buttonWithTitle:@"恢复原文件旁" target:self action:@selector(clearPresetDirectory:)];
+    clear.frame = NSMakeRect(615, 117, 150, 30); [root addSubview:clear];
+    NSButton *save = [NSButton buttonWithTitle:@"保存组合" target:self action:@selector(savePreset:)];
+    save.frame = NSMakeRect(276, 56, 115, 34); [root addSubview:save];
+    NSTextField *hint = [self labelWithText:@"目标体积仅用于 JPEG；必要时会继续降低尺寸和画质。" size:11 bold:NO color:NSColor.secondaryLabelColor];
+    hint.frame = NSMakeRect(408, 57, 440, 34); [root addSubview:hint];
+    [self presetSelectionChanged:nil];
+}
+
+- (void)populatePreset:(NSDictionary *)preset {
+    self.presetName.stringValue = preset[@"name"] ?: @"新组合";
+    self.presetMaxSide.stringValue = [preset[@"maxSide"] stringValue] ?: @"1920";
+    self.presetTargetMB.stringValue = [NSString stringWithFormat:@"%g", [preset[@"targetBytes"] doubleValue] / 1000000.0];
+    [self.presetFormat selectItemAtIndex:[preset[@"format"] isEqualToString:@"png"] ? 1 : 0];
+    self.presetStripMetadata.state = [preset[@"stripMetadata"] boolValue] ? NSControlStateValueOn : NSControlStateValueOff;
+    self.presetWatermark.stringValue = preset[@"watermark"] ?: @"";
+    self.presetDirectory.stringValue = preset[@"directory"] ?: @"";
+}
+
+- (void)presetSelectionChanged:(id)sender {
+    NSInteger index = self.presetPopup.indexOfSelectedItem;
+    NSArray *presets = self.settings[@"imagePresets"];
+    [self populatePreset:index >= 0 && index < presets.count ? presets[index] : @{@"stripMetadata": @YES}];
+}
+
+- (void)newPreset:(id)sender {
+    [self.presetPopup selectItem:nil];
+    [self populatePreset:@{@"name": @"新组合", @"maxSide": @1920, @"targetBytes": @1000000, @"stripMetadata": @YES}];
+}
+
+- (void)deletePreset:(id)sender {
+    NSInteger index = self.presetPopup.indexOfSelectedItem;
+    NSMutableArray *presets = [self.settings[@"imagePresets"] mutableCopy];
+    if (index < 0 || index >= presets.count) return;
+    [presets removeObjectAtIndex:index]; self.settings[@"imagePresets"] = presets;
+    [self saveSettings]; [self rebuildSettingsWindow];
+}
+
+- (void)choosePresetDirectory:(id)sender {
+    NSURL *directory = [self chooseDestinationDirectoryForMove:NO];
+    if (directory) self.presetDirectory.stringValue = directory.path;
+}
+
+- (void)clearPresetDirectory:(id)sender { self.presetDirectory.stringValue = @""; }
+
+- (void)savePreset:(id)sender {
+    NSScanner *sideScanner = [NSScanner scannerWithString:self.presetMaxSide.stringValue];
+    NSScanner *mbScanner = [NSScanner scannerWithString:self.presetTargetMB.stringValue];
+    NSInteger side = 0; double megabytes = 0;
+    NSString *name = [self.presetName.stringValue stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    if (!name.length || ![sideScanner scanInteger:&side] || !sideScanner.isAtEnd || side < 0 || side > 30000 ||
+        ![mbScanner scanDouble:&megabytes] || !mbScanner.isAtEnd || !isfinite(megabytes) || megabytes < 0 || megabytes > 100 ||
+        (megabytes > 0 && megabytes < 0.01) || self.presetWatermark.stringValue.length > 120) {
+        [self showError:@"请输入组合名称、0–30000 的整数尺寸和 0 或 0.01–100 MB 的目标体积；水印最多 120 字。"]; return;
+    }
+    NSString *format = self.presetFormat.indexOfSelectedItem == 1 ? @"png" : @"jpg";
+    if (megabytes > 0 && [format isEqualToString:@"png"]) { [self showError:@"PNG 请把目标 MB 设为 0，或改为 JPEG。"]; return; }
+    NSDictionary *preset = @{@"name": name, @"format": format, @"maxSide": @(side), @"targetBytes": @((long long)(megabytes * 1000000)),
+                              @"stripMetadata": @(self.presetStripMetadata.state == NSControlStateValueOn),
+                              @"watermark": self.presetWatermark.stringValue, @"directory": self.presetDirectory.stringValue};
+    NSMutableArray *presets = [self.settings[@"imagePresets"] mutableCopy];
+    NSInteger index = self.presetPopup.indexOfSelectedItem;
+    for (NSUInteger i = 0; i < presets.count; i++) if (i != index && [presets[i][@"name"] isEqualToString:name]) { [self showError:@"已有同名组合，请使用不同名称。"]; return; }
+    if (index >= 0 && index < presets.count) presets[index] = preset; else [presets addObject:preset];
+    self.settings[@"imagePresets"] = presets;
+    [self saveSettings]; [self rebuildSettingsWindow];
+    [self.presetPopup selectItemWithTitle:name]; [self presetSelectionChanged:nil];
+}
+
+- (NSString *)askForText:(NSString *)title hint:(NSString *)hint value:(NSString *)value {
+    NSAlert *alert = [[NSAlert alloc] init]; alert.messageText = title; alert.informativeText = hint;
+    [alert addButtonWithTitle:@"继续"]; [alert addButtonWithTitle:@"取消"];
+    NSTextField *field = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 420, 28)];
+    field.stringValue = value ?: @""; [field setAccessibilityLabel:title];
+    alert.accessoryView = field; [NSApp activateIgnoringOtherApps:YES];
+    [alert.window setInitialFirstResponder:field];
+    return [alert runModal] == NSAlertFirstButtonReturn ? field.stringValue : nil;
+}
+
+- (NSInteger)chooseEntry:(NSArray<NSDictionary *> *)entries title:(NSString *)title {
+    if (!entries.count) { [self showError:@"还没有可用项目，请先在设置中添加。"]; return -1; }
+    NSAlert *alert = [[NSAlert alloc] init]; alert.messageText = title;
+    [alert addButtonWithTitle:@"继续"]; [alert addButtonWithTitle:@"取消"];
+    NSPopUpButton *popup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(0, 0, 420, 30)];
+    for (NSDictionary *entry in entries) [popup addItemWithTitle:entry[@"name"]];
+    [popup setAccessibilityLabel:title]; alert.accessoryView = popup;
+    [NSApp activateIgnoringOtherApps:YES];
+    return [alert runModal] == NSAlertFirstButtonReturn ? popup.indexOfSelectedItem : -1;
+}
+
+- (void)runBatch:(NSString *)title items:(NSArray<NSString *> *)items operation:(NSDictionary *(^)(NSString *, NSProgress *, NSError **))operation completion:(void (^)(NSArray<NSDictionary *> *))completion {
+    if (self.busy) { [self showError:@"当前操作尚未结束，请等待完成或取消后再试。"]; return; }
+    if (!items.count) { [self showError:@"请先在 Finder 中选择文件。"]; return; }
+    self.busy = YES;
+    self.jobProgress = [NSProgress progressWithTotalUnitCount:items.count];
+    self.jobOutputs = @[];
+    [self.jobWindow close];
+    self.jobWindow = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 700, 450) styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable backing:NSBackingStoreBuffered defer:NO];
+    self.jobWindow.releasedWhenClosed = NO; self.jobWindow.title = title; [self.jobWindow center];
+    NSView *root = self.jobWindow.contentView;
+    self.jobStatus = [self labelWithText:@"准备执行…" size:15 bold:YES color:NSColor.labelColor];
+    self.jobStatus.frame = NSMakeRect(24, 402, 650, 26); [root addSubview:self.jobStatus];
+    self.jobIndicator = [[NSProgressIndicator alloc] initWithFrame:NSMakeRect(24, 374, 650, 16)];
+    self.jobIndicator.indeterminate = NO; self.jobIndicator.maxValue = items.count; [root addSubview:self.jobIndicator];
+    NSScrollView *scroll = [[NSScrollView alloc] initWithFrame:NSMakeRect(24, 72, 650, 285)]; scroll.hasVerticalScroller = YES;
+    self.jobDetails = [[NSTextView alloc] initWithFrame:scroll.contentView.bounds];
+    self.jobDetails.editable = NO; self.jobDetails.font = [NSFont monospacedSystemFontOfSize:12 weight:NSFontWeightRegular];
+    scroll.documentView = self.jobDetails; [root addSubview:scroll];
+    self.jobCancelButton = [NSButton buttonWithTitle:@"取消后续项目" target:self action:@selector(cancelCurrentOperation:)];
+    self.jobCancelButton.frame = NSMakeRect(24, 22, 150, 32); [root addSubview:self.jobCancelButton];
+    NSButton *reveal = [NSButton buttonWithTitle:@"在 Finder 查看结果" target:self action:@selector(revealJobOutputs:)];
+    reveal.frame = NSMakeRect(184, 22, 170, 32); [root addSubview:reveal];
+    NSButton *undo = [NSButton buttonWithTitle:@"撤销上次移动/重命名" target:self action:@selector(undoLastOperation:)];
+    undo.frame = NSMakeRect(370, 22, 195, 32); [root addSubview:undo];
+    [NSApp activateIgnoringOtherApps:YES]; [self.jobWindow makeKeyAndOrderFront:nil];
+    NSProgress *progress = self.jobProgress;
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        NSMutableArray *results = [NSMutableArray array];
+        NSUInteger failures = 0;
+        for (NSString *item in items) {
+            if (progress.cancelled) break;
+            @autoreleasepool {
+                dispatch_async(dispatch_get_main_queue(), ^{ self.jobStatus.stringValue = [NSString stringWithFormat:@"正在处理：%@", item.lastPathComponent]; });
+                NSError *error = nil;
+                NSDictionary *result = nil;
+                @try { result = operation(item, progress, &error); }
+                @catch (NSException *exception) { error = QRError(exception.reason ?: @"处理文件时发生异常"); }
+                if (!result && !error) error = QRError(@"操作未返回结果");
+                if (error) failures++;
+                NSMutableDictionary *entry = [NSMutableDictionary dictionaryWithDictionary:result ?: @{}];
+                entry[@"source"] = item;
+                if (error) entry[@"error"] = error.localizedDescription;
+                [results addObject:entry];
+                progress.completedUnitCount++;
+                NSString *line = [NSString stringWithFormat:@"%@ %@\n%@\n\n", error ? @"失败" : @"完成", item, error.localizedDescription ?: result[@"message"] ?: result[@"output"] ?: @""];
+                double count = progress.completedUnitCount;
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    self.jobIndicator.doubleValue = count;
+                    [self.jobDetails.textStorage appendAttributedString:[[NSAttributedString alloc] initWithString:line]];
+                    [self.jobDetails scrollRangeToVisible:NSMakeRange(self.jobDetails.string.length, 0)];
+                });
+            }
+        }
+        dispatch_async(dispatch_get_main_queue(), ^{
+            self.busy = NO; self.jobCancelButton.enabled = NO;
+            NSMutableArray *outputs = [NSMutableArray array], *undo = [NSMutableArray array];
+            for (NSDictionary *result in results) {
+                if (result[@"output"]) [outputs addObject:[NSURL fileURLWithPath:result[@"output"]]];
+                if (result[@"undo"]) [undo addObject:result[@"undo"]];
+            }
+            self.jobOutputs = outputs;
+            if (undo.count) self.undoRecords = undo;
+            self.jobStatus.stringValue = [NSString stringWithFormat:@"%@：成功 %lu，失败 %lu，未执行 %lu", progress.cancelled ? @"已取消" : @"已完成", (unsigned long)(results.count - failures), (unsigned long)failures, (unsigned long)(items.count - results.count)];
+            if (completion) completion(results);
+        });
+    });
+}
+
+- (void)cancelCurrentOperation:(id)sender {
+    [self.jobProgress cancel];
+    self.jobCancelButton.enabled = NO;
+    self.jobStatus.stringValue = @"正在取消；正在进行的文件复制或识别会先结束。";
+}
+
+- (void)showRecentOperation:(id)sender {
+    if (!self.jobWindow) { [self showInfo:@"暂无操作记录" details:@"批量处理结果会显示在这里。"]; return; }
+    [NSApp activateIgnoringOtherApps:YES]; [self.jobWindow makeKeyAndOrderFront:nil];
+}
+
+- (void)revealJobOutputs:(id)sender {
+    NSMutableArray *existing = [NSMutableArray array];
+    for (NSURL *url in self.jobOutputs) if (QRPathExists(url.path)) [existing addObject:url];
+    if (existing.count) [[NSWorkspace sharedWorkspace] activateFileViewerSelectingURLs:existing];
+}
+
+- (void)undoLastOperation:(id)sender {
+    if (self.busy) { [self showError:@"请等待当前操作结束。"]; return; }
+    if (!self.undoRecords.count) { [self showInfo:@"暂无可撤销操作" details:@"保留本次运行中最近一批移动或重命名记录。"]; return; }
+    NSAlert *alert = [[NSAlert alloc] init]; alert.messageText = @"撤销上次移动或重命名？";
+    alert.informativeText = [NSString stringWithFormat:@"共 %lu 项。文件被修改或原位置已被占用时会跳过，失败项保留以便重试。", (unsigned long)self.undoRecords.count];
+    [alert addButtonWithTitle:@"撤销"]; [alert addButtonWithTitle:@"取消"];
+    [NSApp activateIgnoringOtherApps:YES]; if ([alert runModal] != NSAlertFirstButtonReturn) return;
+    NSArray *records = [[self.undoRecords reverseObjectEnumerator] allObjects];
+    NSMutableDictionary *lookup = [NSMutableDictionary dictionary];
+    for (NSDictionary *record in records) lookup[record[@"target"]] = record;
+    NSMutableSet *done = [NSMutableSet set];
+    [self runBatch:@"撤销文件操作" items:[records valueForKey:@"target"] operation:^NSDictionary *(NSString *path, NSProgress *progress, NSError **error) {
+        NSDictionary *record = lookup[path];
+        if (!QRUndoMove(record, error)) return nil;
+        [done addObject:path];
+        return @{@"output": record[@"source"]};
+    } completion:^(NSArray *results) {
+        NSMutableArray *remaining = [NSMutableArray array];
+        for (NSDictionary *record in records) if (![done containsObject:record[@"target"]]) [remaining addObject:record];
+        self.undoRecords = remaining;
+    }];
+}
+
+- (void)saveClipboardAtDirectory:(NSURL *)directory format:(NSString *)format {
+    NSPasteboard *pasteboard = [self pasteboard];
+    NSData *data = nil;
+    if ([format isEqualToString:@"png"]) {
+        NSArray<NSImage *> *images = [pasteboard readObjectsForClasses:@[NSImage.class] options:@{}];
+        NSImage *image = images.firstObject;
+        if (!image) { [self showError:@"剪贴板中没有可保存的图片。"]; return; }
+        CGImageRef cg = [image CGImageForProposedRect:NULL context:nil hints:nil];
+        if (cg) data = [[[NSBitmapImageRep alloc] initWithCGImage:cg] representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
+    } else {
+        NSString *text = [pasteboard stringForType:NSPasteboardTypeString];
+        if (!text) { [self showError:@"剪贴板中没有文字。"]; return; }
+        data = [text dataUsingEncoding:NSUTF8StringEncoding];
+    }
+    if (!data) { [self showError:@"无法读取剪贴板内容。"]; return; }
+    NSData *snapshot = [data copy];
+    [self runBatch:@"保存剪贴板" items:@[directory.path] operation:^NSDictionary *(NSString *path, NSProgress *progress, NSError **error) {
+        NSURL *target = QRUniqueURL(directory, [@"Clipboard" stringByAppendingPathExtension:format]);
+        return QRWriteNewData(snapshot, target, error) ? @{@"output": target.path} : nil;
+    } completion:nil];
+}
+
+- (NSURL *)chooseApplication {
+    NSOpenPanel *panel = [NSOpenPanel openPanel];
+    panel.title = @"选择应用"; panel.prompt = @"使用这个应用";
+    panel.canChooseDirectories = NO; panel.canChooseFiles = YES; panel.allowsMultipleSelection = NO;
+    panel.allowedContentTypes = @[UTTypeApplicationBundle]; panel.directoryURL = [NSURL fileURLWithPath:@"/Applications"];
+    [NSApp activateIgnoringOtherApps:YES];
+    return [panel runModal] == NSModalResponseOK ? panel.URL : nil;
+}
+
+- (void)choosePreferredApplication:(id)sender {
+    NSURL *url = [self chooseApplication];
+    if (!url) return;
+    self.settings[@"preferredApplication"] = url.path; [self saveSettings]; [self rebuildSettingsWindow];
+}
+
+- (void)openPaths:(NSArray<NSString *> *)paths directory:(NSURL *)directory action:(NSString *)action {
+    NSURL *application = nil;
+    if ([action isEqualToString:@"open-choose"]) application = [self chooseApplication];
+    else if ([action isEqualToString:@"open-preferred"]) {
+        NSString *path = self.settings[@"preferredApplication"];
+        if (path.length) application = [NSURL fileURLWithPath:path];
+        else { application = [self chooseApplication]; if (application) { self.settings[@"preferredApplication"] = application.path; [self saveSettings]; } }
+    } else application = [[NSWorkspace sharedWorkspace] URLForApplicationWithBundleIdentifier:[action isEqualToString:@"open-vscode"] ? @"com.microsoft.VSCode" : @"com.todesktop.230313mzl4w4u92"];
+    if (!application) { if (![action isEqualToString:@"open-choose"]) [self showError:@"未找到所选应用。可以在设置 → 打开方式中选择已安装的应用。"]; return; }
+    NSMutableArray *urls = [NSMutableArray array];
+    for (NSString *path in paths) [urls addObject:[NSURL fileURLWithPath:path]];
+    if (!urls.count) [urls addObject:directory];
+    NSWorkspaceOpenConfiguration *config = [NSWorkspaceOpenConfiguration configuration]; config.activates = YES;
+    [[NSWorkspace sharedWorkspace] openURLs:urls withApplicationAtURL:application configuration:config completionHandler:^(NSRunningApplication *app, NSError *error) {
+        if (error) [self showError:error.localizedDescription];
+    }];
+}
+
+- (void)importTemplate:(id)sender {
+    if (self.busy) { [self showError:@"请等待当前操作完成。"]; return; }
+    NSOpenPanel *panel = [NSOpenPanel openPanel]; panel.title = @"导入文件或文件夹模板";
+    panel.canChooseFiles = YES; panel.canChooseDirectories = YES; panel.allowsMultipleSelection = NO;
+    if ([panel runModal] != NSModalResponseOK) return;
+    NSURL *source = panel.URL;
+    NSURL *templates = [[self settingsURL].URLByDeletingLastPathComponent URLByAppendingPathComponent:@"Templates" isDirectory:YES];
+    NSString *displayName = source.lastPathComponent;
+    [self runBatch:@"导入模板" items:@[source.path] operation:^NSDictionary *(NSString *path, NSProgress *progress, NSError **error) {
+        if (![[NSFileManager defaultManager] createDirectoryAtURL:templates withIntermediateDirectories:YES attributes:nil error:error]) return nil;
+        NSURL *copy = QRCopyTemplate(source, templates, [NSString stringWithFormat:@"%@-%@", NSUUID.UUID.UUIDString, displayName], error);
+        return copy ? @{@"output": copy.path} : nil;
+    } completion:^(NSArray *results) {
+        NSString *path = [results.firstObject objectForKey:@"output"];
+        if (!path) return;
+        NSMutableArray *templates = [self.settings[@"importedTemplates"] mutableCopy];
+        NSString *name = displayName;
+        NSArray *names = [templates valueForKey:@"name"];
+        for (NSUInteger suffix = 2; [names containsObject:name]; suffix++) {
+            NSString *base = displayName.stringByDeletingPathExtension;
+            name = [NSString stringWithFormat:@"%@ %lu", base, (unsigned long)suffix];
+            if (displayName.pathExtension.length) name = [name stringByAppendingPathExtension:displayName.pathExtension];
+        }
+        [templates addObject:@{@"name": name, @"path": path}]; self.settings[@"importedTemplates"] = templates;
+        [self saveSettings]; if ([self.settingsPage isEqualToString:@"templates"]) [self rebuildSettingsWindow];
+    }];
+}
+
+- (void)removeImportedTemplate:(id)sender {
+    NSInteger index = self.importedTemplatePopup.indexOfSelectedItem;
+    NSMutableArray *entries = [self.settings[@"importedTemplates"] mutableCopy];
+    if (index < 0 || index >= entries.count || self.busy) return;
+    NSString *path = entries[index][@"path"];
+    NSString *managed = [[[self settingsURL].URLByDeletingLastPathComponent URLByAppendingPathComponent:@"Templates"].path stringByAppendingString:@"/"];
+    if ([path.stringByStandardizingPath hasPrefix:managed] && QRPathExists(path)) {
+        NSError *error = nil;
+        if (![[NSFileManager defaultManager] trashItemAtURL:[NSURL fileURLWithPath:path] resultingItemURL:NULL error:&error]) { [self showError:error.localizedDescription]; return; }
+    }
+    [entries removeObjectAtIndex:index]; self.settings[@"importedTemplates"] = entries;
+    [self saveSettings]; [self rebuildSettingsWindow];
+}
+
+- (void)createFromTemplateAtDirectory:(NSURL *)directory imported:(BOOL)imported {
+    NSDictionary *entry = nil;
+    if (imported) {
+        NSArray *entries = self.settings[@"importedTemplates"];
+        NSInteger index = [self chooseEntry:entries title:@"选择模板"];
+        if (index < 0) return;
+        entry = entries[index];
+    }
+    NSString *name = [self askForText:imported ? @"新建模板副本" : @"新建项目文件夹" hint:imported ? @"输入完整名称；文件模板请保留扩展名。原模板不变。" : @"将创建文档、素材、输出文件夹和 README.md。" value:entry ? entry[@"name"] : @"新项目"];
+    if (!name) return;
+    if (!QRValidFilename(name)) { [self showError:@"请输入有效名称，不要包含斜杠、冒号或控制字符。"]; return; }
+    [self runBatch:@"从模板新建" items:@[directory.path] operation:^NSDictionary *(NSString *path, NSProgress *progress, NSError **error) {
+        NSURL *target = entry ? QRCopyTemplate([NSURL fileURLWithPath:entry[@"path"]], directory, name, error) : QRCreateProject(directory, name, error);
+        return target ? @{@"output": target.path} : nil;
+    } completion:nil];
+}
+
+- (void)runImageBatch:(NSArray<NSString *> *)paths options:(NSDictionary *)options title:(NSString *)title {
+    NSDictionary *snapshot = [options copy];
+    [self runBatch:title items:paths operation:^NSDictionary *(NSString *path, NSProgress *progress, NSError **error) {
+        NSURL *source = [NSURL fileURLWithPath:path];
+        NSURL *destination = source.URLByDeletingLastPathComponent;
+        NSString *output = snapshot[@"directory"];
+        if (output.length) destination = [NSURL fileURLWithPath:output];
+        else if ([snapshot[@"subfolder"] boolValue]) destination = [destination URLByAppendingPathComponent:@"已处理" isDirectory:YES];
+        if (![[NSFileManager defaultManager] createDirectoryAtURL:destination withIntermediateDirectories:YES attributes:nil error:error]) return nil;
+        NSURL *target = QRProcessImage(source, destination, snapshot, progress, error);
+        return target ? @{@"output": target.path} : nil;
+    } completion:nil];
+}
+
+- (void)processImages:(NSArray<NSString *> *)paths action:(NSString *)action {
+    NSMutableDictionary *options = [@{@"format": @"jpg", @"stripMetadata": @NO} mutableCopy];
+    NSString *title = @"处理图片";
+    if ([action isEqualToString:@"workflow-run"]) {
+        NSArray *presets = self.settings[@"imagePresets"];
+        NSInteger index = [self chooseEntry:presets title:@"运行图片处理组合"];
+        if (index < 0) return;
+        options = [presets[index] mutableCopy]; options[@"subfolder"] = @YES; title = options[@"name"];
+    } else if ([action isEqualToString:@"image-resize"]) { options[@"maxSide"] = @1920; options[@"format"] = @"png"; }
+    else if ([action isEqualToString:@"image-target-size"]) options[@"targetBytes"] = @1000000;
+    else if ([action isEqualToString:@"image-strip-metadata"]) { options[@"stripMetadata"] = @YES; options[@"format"] = @"png"; }
+    else if ([action isEqualToString:@"image-watermark"]) {
+        NSString *text = [self askForText:@"水印文字" hint:@"在图片底部添加文字水印并另存为 PNG，最多 120 字。" value:@""];
+        if (!text) return;
+        if (!text.length || text.length > 120) { [self showError:@"水印请输入 1–120 个字符。"]; return; }
+        options[@"watermark"] = text; options[@"format"] = @"png";
+    }
+    [self runImageBatch:paths options:options title:title];
+}
+
+- (void)exportManifest:(NSArray<NSString *> *)paths directory:(NSURL *)directory format:(NSString *)format {
+    NSArray *selected = paths.count ? paths : @[directory.path];
+    BOOL tree = [format isEqualToString:@"tree"];
+    [self runBatch:tree ? @"复制目录树" : @"导出文件清单" items:@[directory.path] operation:^NSDictionary *(NSString *path, NSProgress *progress, NSError **error) {
+        NSString *manifest = QRFileManifest(selected, format, progress, error);
+        if (!manifest) return nil;
+        if (tree) return @{@"text": manifest, @"message": @"目录树已生成"};
+        NSURL *target = QRUniqueURL(directory, [@"文件清单" stringByAppendingPathExtension:format]);
+        return QRWriteNewData([manifest dataUsingEncoding:NSUTF8StringEncoding], target, error) ? @{@"output": target.path} : nil;
+    } completion:^(NSArray *results) {
+        NSString *text = [results.firstObject objectForKey:@"text"];
+        if (text) { [self copyValueToPasteboard:text label:@"目录树"]; [self showTextPreview:text title:@"目录树（已复制）"]; }
+    }];
+}
+
+- (void)makePDF:(NSArray<NSString *> *)paths directory:(NSURL *)directory images:(BOOL)images {
+    if (!paths.count) { [self showError:@"请选择图片或 PDF 文件。"]; return; }
+    NSArray *sorted = [paths sortedArrayUsingSelector:@selector(localizedStandardCompare:)];
+    NSString *name = [self askForText:images ? @"图片合成 PDF" : @"合并 PDF" hint:@"按文件名自然顺序合并。请输入输出名称，原文件保留。" value:images ? @"图片合集.pdf" : @"合并.pdf"];
+    if (!name) return;
+    if (!QRValidFilename(name)) { [self showError:@"请输入有效文件名。"]; return; }
+    [self runBatch:@"生成 PDF" items:@[directory.path] operation:^NSDictionary *(NSString *path, NSProgress *progress, NSError **error) {
+        NSURL *target = QRCreatePDF(sorted, directory, name, images, progress, error);
+        return target ? @{@"output": target.path} : nil;
+    } completion:nil];
+}
+
+- (void)recognizeImages:(NSArray<NSString *> *)paths {
+    [self runBatch:@"识别图片文字" items:paths operation:^NSDictionary *(NSString *path, NSProgress *progress, NSError **error) {
+        NSString *text = QRRecognizeText([NSURL fileURLWithPath:path], error);
+        return text ? @{@"text": text, @"message": text.length ? text : @"未识别到文字"} : nil;
+    } completion:^(NSArray *results) {
+        NSMutableArray *texts = [NSMutableArray array];
+        for (NSDictionary *entry in results) if ([entry[@"text"] length]) [texts addObject:results.count == 1 ? entry[@"text"] : [NSString stringWithFormat:@"%@\n%@", [entry[@"source"] lastPathComponent], entry[@"text"]]];
+        if (texts.count) {
+            NSString *text = [texts componentsJoinedByString:@"\n\n"];
+            [self copyValueToPasteboard:text label:@"识别结果"]; [self showTextPreview:text title:@"识别结果（已复制）"];
+        }
+    }];
+}
+
+- (void)copyBatchText:(NSArray<NSDictionary *> *)results title:(NSString *)title {
+    NSMutableArray *texts = [NSMutableArray array];
+    for (NSDictionary *entry in results) if ([entry[@"text"] length]) [texts addObject:entry[@"text"]];
+    if (!texts.count) return;
+    NSString *text = [texts componentsJoinedByString:@"\n"];
+    [self copyValueToPasteboard:text label:title];
+    [self showTextPreview:text title:title];
 }
 
 @end
